@@ -1,5 +1,4 @@
 #!/bin/bash
-# Fetch PnLCalib (GPL-2.0, github.com/mguti97/PnLCalib) and its single-view weights (~530 MB).
 set -e
 cd "$(dirname "$0")"
 mkdir -p third_party
