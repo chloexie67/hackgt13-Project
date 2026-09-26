@@ -16,6 +16,10 @@ yaml = (src / "data.yaml").read_text()
 names_block = yaml[yaml.index("names:"):]
 
 counts = [dict(train=0, val=0) for _ in range(parts)]
+for k in range(parts):
+    for split in ("train", "val"):
+        for sub in ("images", "labels"):
+            Path(f"{src}_part{k + 1}", split, sub).mkdir(parents=True, exist_ok=True)
 for split in ("train", "val"):
     images = sorted((src / split / "images").glob("*.jpg"))
     for i, img in enumerate(images):

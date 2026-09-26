@@ -6,16 +6,17 @@ plane lands in the image, so the 3x4 camera matrix is reduced to an image -> pit
 homography in this project's coordinates (x 0..105 goal line to goal line, y 0..68).
 """
 import sys
+import traceback
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-REPO = Path(__file__).parent / "third_party" / "PnLCalib"
+from .device import GPU_LOCK
+from .pitch import PITCH_VERTICES, line_mask, line_score
 
-# Apple's Metal backend crashes if two threads encode GPU work at once, so everything that
-# runs a model on the GPU while calibration may be running on another thread takes this.
-GPU_LOCK = __import__("threading").Lock()
+PNLCALIB_DIR = Path(__file__).resolve().parent.parent / "third_party" / "PnLCalib"
+
 
 
 class FieldCalibrator:
@@ -25,7 +26,7 @@ class FieldCalibrator:
         import torchvision.transforms as T
         import yaml
 
-        sys.path.insert(0, str(REPO))
+        sys.path.insert(0, str(PNLCALIB_DIR))
         from model.cls_hrnet import get_cls_net
         from model.cls_hrnet_l import get_cls_net as get_cls_net_l
 
@@ -33,11 +34,11 @@ class FieldCalibrator:
         if device == "cpu":
             torch.set_num_threads(4)  # leave cores for the main loop
         self.pnl_refine, self.kp_threshold, self.line_threshold = pnl_refine, kp_threshold, line_threshold
-        weights_kp = weights_kp or REPO / "weights" / "SV_kp"
-        weights_lines = weights_lines or REPO / "weights" / "SV_lines"
+        weights_kp = weights_kp or PNLCALIB_DIR / "weights" / "SV_kp"
+        weights_lines = weights_lines or PNLCALIB_DIR / "weights" / "SV_lines"
 
-        cfg = yaml.safe_load(open(REPO / "config" / "hrnetv2_w48.yaml"))
-        cfg_l = yaml.safe_load(open(REPO / "config" / "hrnetv2_w48_l.yaml"))
+        cfg = yaml.safe_load(open(PNLCALIB_DIR / "config" / "hrnetv2_w48.yaml"))
+        cfg_l = yaml.safe_load(open(PNLCALIB_DIR / "config" / "hrnetv2_w48_l.yaml"))
         self.model = get_cls_net(cfg)
         self.model.load_state_dict(torch.load(weights_kp, map_location="cpu"))
         self.model.to(device).eval()
@@ -202,14 +203,12 @@ class PitchTracker:
         self._new_reference()
 
     def _calibrate(self, frame):
-        import track_ball as tb
-
         H = self.cal.homography(frame)
         if H is None:
             return None
-        lines = tb.line_mask(frame)
+        lines = line_mask(frame)
         dist = cv2.distanceTransform((~lines).astype(np.uint8), cv2.DIST_L2, 3)
-        score = tb.line_score(H, dist)
+        score = line_score(H, dist)
         if score is None or score < self.min_line_score:
             return None
         return H
@@ -217,10 +216,9 @@ class PitchTracker:
     def _worker(self, frame, frame_no, generation):
         try:
             H = self._calibrate(frame)
-        except Exception as e:  # never leave the worker marked busy
-            import traceback
+        except Exception:  # a crash must not leave the worker marked busy forever
             traceback.print_exc()
-            self.last_error, H = e, None
+            H = None
         with self.lock:
             self.busy = False
             if generation == self.generation:
@@ -271,3 +269,70 @@ class PitchTracker:
         if self.H_ref is None or self.last_calib_t is None or t - self.last_calib_t > self.max_stale:
             return None  # no calibration, or only dead reckoning for too long
         return self.H_ref @ np.linalg.inv(self.cum)
+
+
+class KeypointPitchMapper:
+    """Fallback pitch mapping from the roboflow/sports landmark model alone (--pitch keypoints).
+
+    Less accurate than PnLCalib: the landmark positions are often 20-40 px off, i.e.
+    several metres. Fits are blended over time to reduce jitter.
+    """
+
+    MIN_INLIERS = 5
+    MAX_DISAGREE_M = 4.0  # a fit this far from the previous one is taken as a new view, not blended
+
+    def __init__(self, weights: str, device: str, kp_conf: float, hold_frames: int, precision: int = 32):
+        from ultralytics import YOLO
+
+        self.model = YOLO(weights)
+        self.device, self.kp_conf, self.hold_frames = device, kp_conf, hold_frames
+        self.precision = precision
+        self.H = None
+        self.age = 0  # frames since H was last refreshed
+        self.grid = None
+
+    def reset(self):
+        self.H, self.age = None, 0
+
+    def update(self, frame):
+        H = self._fit(frame)
+        if H is not None and self.H is not None:
+            if self.grid is None:
+                h, w = frame.shape[:2]
+                gx, gy = np.meshgrid(np.linspace(0.1, 0.9, 4) * w, np.linspace(0.35, 0.95, 3) * h)
+                self.grid = np.stack([gx.ravel(), gy.ravel()], 1).astype(np.float32)[None]
+            disagree = np.median(np.linalg.norm(cv2.perspectiveTransform(self.grid, H)[0]
+                                                - cv2.perspectiveTransform(self.grid, self.H)[0], axis=1))
+            if disagree <= self.MAX_DISAGREE_M:
+                H = 0.5 * H / H[2, 2] + 0.5 * self.H / self.H[2, 2]
+        if H is not None:
+            self.H, self.age = H, 0
+        else:
+            self.age += 1
+            if self.age > self.hold_frames:  # camera has moved too much to trust the old one
+                self.H = None
+        return self.H
+
+    def hold(self):
+        """Reuse the previous homography without refitting (for --pitch-every > 1)."""
+        self.age += 1
+        if self.age > self.hold_frames:
+            self.H = None
+        return self.H
+
+    def _fit(self, frame):
+        r = self.model.predict(frame, conf=0.3, device=self.device, quantize=self.precision,
+                               verbose=False)[0]
+        if r.keypoints is None or len(r.keypoints) == 0:
+            return None
+        xy = r.keypoints.xy[0].cpu().numpy()
+        conf = (r.keypoints.conf[0].cpu().numpy() if r.keypoints.conf is not None
+                else np.ones(len(xy)))
+        n = min(len(xy), len(PITCH_VERTICES))
+        mask = (conf[:n] > self.kp_conf) & (xy[:n, 0] > 1) & (xy[:n, 1] > 1)
+        if mask.sum() < self.MIN_INLIERS:
+            return None
+        H, inliers = cv2.findHomography(xy[:n][mask], PITCH_VERTICES[:n][mask], cv2.RANSAC, 1.5)
+        if H is None or inliers is None or inliers.sum() < self.MIN_INLIERS:
+            return None
+        return H

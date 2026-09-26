@@ -3,7 +3,7 @@ velocity with a lag-free reference (local quadratic fit using frames before and 
 Usage: python tune_kalman.py results/cx_raw.csv"""
 import csv, sys
 import numpy as np
-import track_ball as tb
+from balltrack.kalman import BallKalman
 
 r = [x for x in csv.DictReader(open(sys.argv[1])) if x["raw_x_m"]]
 t = np.array([float(x["time_s"]) for x in r])
@@ -19,7 +19,7 @@ for i in range(len(t)):
         ref[i] = np.hypot(*[np.polyfit(tt, P[m, k], 2)[1] for k in range(2)])
 
 def replay(**kw):
-    kf, prev, out = tb.BallKalman(**kw), None, []
+    kf, prev, out = BallKalman(**kw), None, []
     for i in range(len(t)):
         if restart[i] or (prev is not None and t[i] - prev > 0.3):
             kf.reset()

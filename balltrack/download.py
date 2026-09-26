@@ -1,14 +1,14 @@
 """Download match footage from YouTube as a single 720p video-only file.
 
 Usage:
-    python download.py URL [URL ...]
+    python -m balltrack.download URL [URL ...]
 
 Video-only streams are used so ffmpeg is not needed for merging.
 """
 import sys
 from pathlib import Path
 
-VIDEO_DIR = Path(__file__).parent / "videos"
+VIDEO_DIR = Path(__file__).resolve().parent.parent / "videos"
 
 
 def download(url: str) -> Path:

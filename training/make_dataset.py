@@ -24,7 +24,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import track_ball as tb
+from balltrack.detection import BallDetector
+from balltrack.device import pick_device
+from balltrack.scene import grass_ratio
 
 # class ids follow the pre-labelling model, so a fine-tune of that model keeps its class order
 # (the team's best.pt: 0 = person, 1 = ball)
@@ -86,7 +88,7 @@ def main():
     random.seed(args.seed)
     csvs = [p for pat in args.hard for p in glob.glob(pat)]
     hard_vid = args.hard_video or Path(args.videos[0]).stem
-    det = tb.BallDetector(args.weights, tb.pick_device("auto"), args.imgsz, 0.1, precision=32)
+    det = BallDetector(args.weights, pick_device("auto"), args.imgsz, 0.1, precision=32)
     BALL, PERSON = det.class_ids[0], det.person_ids[0]
     names = {BALL: "ball", PERSON: "person"}
     out = Path(args.out)
@@ -135,7 +137,7 @@ def main():
                 continue
             if not is_hard:
                 # random picks: keep wide gameplay shots only (close-ups teach little here)
-                if tb.grass_ratio(frame) < 0.35:
+                if grass_ratio(frame) < 0.35:
                     continue
             balls, people = det.detect(frame)
             h, w = frame.shape[:2]

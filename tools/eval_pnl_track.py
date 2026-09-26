@@ -3,8 +3,9 @@
 Usage: python eval_pnl_track.py VIDEO START_S DURATION_S [INTERVAL_S]
 """
 import sys, time, collections, cv2, numpy as np
-import track_ball as tb
-from field_calib import FieldCalibrator, PitchTracker
+from balltrack.pitch import LINE_PTS, line_mask, line_score
+from balltrack.scene import grass_ratio
+from balltrack.calibration import FieldCalibrator, PitchTracker
 video, start, dur = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
 interval = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
 pt = PitchTracker(FieldCalibrator(device="mps"), interval=interval)
@@ -17,14 +18,14 @@ for i in range(n):
     if not ok: break
     t = start + i / fps
     t0 = time.time()
-    if tb.grass_ratio(f) < 0.35:
+    if grass_ratio(f) < 0.35:
         pt.reset(); H = None; st = "not gameplay"
     else:
         H = pt.update(f, i, t); st = "mapped" if H is not None else "none"
     times.append(time.time() - t0); state[st] += 1
     if H is not None and i % 5 == 0:
-        m = tb.line_mask(f); d = cv2.distanceTransform((~m).astype(np.uint8), cv2.DIST_L2, 3)
-        s = tb.line_score(H, d)
+        m = line_mask(f); d = cv2.distanceTransform((~m).astype(np.uint8), cv2.DIST_L2, 3)
+        s = line_score(H, d)
         if s is not None: scores.append(s)
     if abs(t - 650) < 0.5 / fps and H is not None and "OFbyNU6UQQs" in video:
         p = cv2.perspectiveTransform(np.float32(list(truth))[None], np.linalg.inv(H))[0]
@@ -33,7 +34,7 @@ for i in range(n):
     if i % max(1, n // 8) == 0:
         vis = f.copy()
         if H is not None:
-            for q in cv2.perspectiveTransform(tb.LINE_PTS[None], np.linalg.inv(H))[0]:
+            for q in cv2.perspectiveTransform(LINE_PTS[None], np.linalg.inv(H))[0]:
                 if 0 <= q[0] < vis.shape[1] and 0 <= q[1] < vis.shape[0]:
                     cv2.circle(vis, (int(q[0]), int(q[1])), 2, (255, 255, 0), -1)
         vis = cv2.resize(vis, (640, 360))

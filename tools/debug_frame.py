@@ -1,7 +1,7 @@
 """Debug one frame: draw detected pitch keypoints and all ball candidates."""
 import sys, cv2, numpy as np
 from ultralytics import YOLO
-import track_ball as tb
+from balltrack.pitch import PITCH_VERTICES, to_pitch
 video, t = sys.argv[1], float(sys.argv[2])
 out = sys.argv[3] if len(sys.argv) > 3 else "results/debug.png"
 cap = cv2.VideoCapture(video); cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000); ok, frame = cap.read()
@@ -22,7 +22,7 @@ for (x1, y1, x2, y2), c in zip(b.boxes.xyxy.cpu().numpy(), b.boxes.conf.cpu().nu
     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
     cv2.putText(frame, f"{c:.2f}", (int(x1), int(y1) - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 if len(good) >= 4:
-    H, _ = cv2.findHomography(xy[good], tb.PITCH_VERTICES[good], cv2.RANSAC, 1.5)
+    H, _ = cv2.findHomography(xy[good], PITCH_VERTICES[good], cv2.RANSAC, 1.5)
     for (x1, y1, x2, y2) in b.boxes.xyxy.cpu().numpy():
-        print("  -> pitch", tb.to_pitch(H, (x1 + x2) / 2, y2))
+        print("  -> pitch", to_pitch(H, (x1 + x2) / 2, y2))
 cv2.imwrite(out, frame)
