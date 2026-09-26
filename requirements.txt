@@ -1,0 +1,11 @@
+ultralytics>=8.3
+opencv-python>=4.8
+numpy>=1.24
+yt-dlp>=2024.8
+mss>=9.0
+scipy>=1.10
+# PnLCalib (third_party/PnLCalib, see setup_pnlcalib.sh)
+lsq-ellipse>=2.2
+shapely>=2.0
+pyyaml>=6.0
+tqdm>=4.0

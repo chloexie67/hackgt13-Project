@@ -1,0 +1,25 @@
+# environment
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# large local data: videos, outputs, datasets, training runs
+videos/
+results/
+runs/
+dataset/
+dataset_*/
+labeled/
+training_set/
+*.zip
+*.mp4
+
+# downloaded third-party code and weights (see setup_pnlcalib.sh)
+third_party/
+yolo11*.pt
+models/*
+!models/ball_person.pt
+
+# personal drafts
+hackgt draft/
