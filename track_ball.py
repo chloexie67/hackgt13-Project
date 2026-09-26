@@ -1,4 +1,14 @@
-"""Locate the soccer ball on the pitch in broadcast footage (recorded or live).
+"""Our goal is to create a way for the visually impaired to experience soccer.
+
+General outline:
+
+ 1. Used existing machine learning library YOLO found from research on Roboflow to detect the soccer ball from broadcast footage
+ 2. To connect our software to the hardware, we mapped the ball's position on screen to real field coordinates with the center spot at (0,0). We used PnLCalib, which fits the camera to the field's landmarks and painted lines.
+ 3. Due to lack of accuracy, we cleaned data and trained our own model to increase coverage and precision. We labeled frames on Roboflow, including frames from our review of the tracker's mistakes, and trained in Colab and on a laptop.
+ 4. Used a Kalman filter to smooth position and velocity. We filtered out close-ups, replays and off-pitch objects. Position is not recorded while the ball is in the air.
+ 5. Tested and validated against real match video. We reviewed annotated videos frame by frame, checked field positions against the pitch markings, and compared velocities with speeds measured from the raw positions.
+ 6. Sent x-y coordinates and x-y velocities to the ESP32 over UDP (Wi-Fi). Information is sent live within 0.3 seconds of the kick, or as one velocity per pass for recorded games.
+
 
 Pipeline per frame:
     1. Scene filter   - pause on replays / close-ups / crowd shots (little grass, or a
@@ -15,13 +25,6 @@ Pipeline per frame:
     5. Output         - CSV per frame, optional annotated video with a radar minimap,
                         optional UDP JSON stream for the haptic device. Positions are
                         relative to the centre spot (0, 0).
-
-Setup: pip install -r requirements.txt && ./setup_pnlcalib.sh
-
-Examples:
-    python track_ball.py videos/OFbyNU6UQQs.mp4 --start 600 --duration 60 --out-video annotated.mp4
-    python track_ball.py "https://www.youtube.com/watch?v=OFbyNU6UQQs"     # downloads first
-    python track_ball.py screen --region 0,100,1280,720 --udp 192.168.1.50:5005   # live
 """
 import argparse
 import csv
@@ -49,20 +52,15 @@ from balltrack.sources import FileSource, LiveSource
 CSV_FIELDS = [
     "frame", "time_s", "state", "confidence",
     "ball_px_x", "ball_px_y", "screen_x", "screen_y",
-    # metres from the centre spot: +x toward the goal on the right of the main camera view,
-    # +y toward the camera-side touchline; *_norm scales goal line / touchline to +-1
     "field_x_m", "field_y_m", "field_vx_ms", "field_vy_ms",
     "field_x_norm", "field_y_norm", "has_homography",
     "air_accel_ms2", "track_conf", "n_detected", "n_plausible",
     "raw_x_m", "raw_y_m", "kf_restart",
-    # motor speed signal (motor_speed.py), describing the ball at motor_t (--motor-delay earlier)
     "motor_t", "motor_speed_ms", "motor_vx_ms", "motor_vy_ms", "motor_touch",
-    # live pass profile (live_passes.py): motor velocity now, and the pass it comes from
     "live_vx_ms", "live_vy_ms", "live_speed_ms",
     "pass_t0", "pass_vx0_ms", "pass_vy0_ms", "pass_decel_ms2", "new_pass",
 ]
 
-# UDP message key -> CSV column
 UDP_FIELDS = {
     "t": "time_s", "state": "state", "x": "field_x_norm", "y": "field_y_norm",
     "vx": "field_vx_ms", "vy": "field_vy_ms", "sx": "screen_x", "sy": "screen_y",
@@ -98,9 +96,7 @@ def run(args):
     pitch_tracker = keypoint_mapper = None
     if args.pitch == "pnl":
         background = live or args.realtime
-        # live: calibrate on the CPU so the ball detector never waits for the GPU
         calib_device = args.calib_device or ("cpu" if background else device)
-        # camera tracking holds ~6 s from one calibration; CPU calibrations arrive ~3 s late
         pitch_tracker = PitchTracker(FieldCalibrator(device=calib_device), interval=args.calib_interval,
                                      async_=background, max_stale=6.0 if calib_device == "cpu" else 4.0)
     elif args.pitch == "keypoints":
@@ -126,8 +122,8 @@ def run(args):
         udp_sock, udp_addr = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), (host, int(port))
 
     last_ball_px, missed_s, t_prev = None, 0.0, None
-    last_sent_xy = None      # last reported position (pitch metres), for the speed cap
-    last_ground_t = None     # when the filter last got a mapped ground position
+    last_sent_xy = None
+    last_ground_t = None
     gameplay_streak = args.resume_frames
     processed = 0
     t_start = t_report = time.time()
@@ -146,7 +142,6 @@ def run(args):
             gameplay = grass_ratio(frame) >= args.min_grass and not promo_frame(frame)
             balls, people = detector.detect(frame) if gameplay else ([], [])
             tallest = max(((b[3] - b[1]) / height for b in people), default=0.0)
-            # stay paused until the wide shot has held for a few frames (avoids flicker at cuts)
             gameplay_streak = 0 if (not gameplay or tallest > args.max_person) else gameplay_streak + 1
             if gameplay_streak < args.resume_frames:
                 row["state"] = "paused"
@@ -183,20 +178,17 @@ def run(args):
                                screen_x=round(cx / width, 4), screen_y=round(cy / height, 4))
                     ground = None
                     if homography is not None:
-                        # bottom of the box = where the ball touches the grass
                         gx, gy = to_pitch(homography, cx, bottom)
                         ground = (gx, gy) if on_pitch(gx, gy) else None
 
                     if switched or prev_px is None or missed_before > 0 or \
                             np.hypot(cx - prev_px[0], cy - prev_px[1]) > 0.08 * width:
                         flight.break_track()
-                    # height on screen with camera motion removed, for the gravity test
                     y_stable = cy
                     if pitch_tracker is not None:
                         y_stable = cv2.perspectiveTransform(np.float32([[[cx, cy]]]),
                                                             np.linalg.inv(pitch_tracker.cum))[0, 0, 1]
                     if switched:
-                        # the frames spent confirming the new ball are part of its trajectory
                         for t_seen, seen in selector.confirmed_track:
                             y_seen = seen[1]
                             if pitch_tracker is not None:
@@ -209,7 +201,7 @@ def run(args):
                                              on_ground=at_feet(people, cx, cy))
                     row["air_accel_ms2"] = "" if flight.accel is None else round(flight.accel, 2)
                     if airborne:
-                        row["state"] = "air"  # ground projection is wrong in the air
+                        row["state"] = "air"  # positions are wrong while the ball is in the air
                         ball_kf.reset()
                     elif ground is not None:
                         if was_airborne or switched:
@@ -220,7 +212,7 @@ def run(args):
                         last_ground_t = t
                 elif flight.airborne and t - flight.since <= flight.max_air_s:
                     missed_s += dt
-                    row["state"] = "air"  # often lost against the crowd mid-flight
+                    row["state"] = "air"
                 else:
                     missed_s += dt
                     if missed_s > args.max_coast:
@@ -234,7 +226,7 @@ def run(args):
                 if row["state"] in ("live", "coasting"):
                     row["track_conf"] = round(selector.conf_ema, 3)
                 if row["state"] in ("live", "coasting") and selector.conf_ema < args.min_report_conf:
-                    row["state"] = "uncertain"  # weak picks (often a boot) are followed but not sent
+                    row["state"] = "uncertain"  # this should filter out low certainty things
                 fresh = last_ground_t is not None and t - last_ground_t <= args.max_coast
                 if row["state"] in ("live", "coasting") and not fresh:
                     row["state"] = "unmapped" if homography is None else row["state"]
@@ -242,7 +234,6 @@ def run(args):
                     x, y, vx, vy = ball_kf.x
                     x, y = float(np.clip(x, 0, PITCH_LENGTH)), float(np.clip(y, 0, PITCH_WIDTH))
                     if last_sent_xy is not None:
-                        # never faster than a real ball: a re-acquired position is glided to
                         step, cap = np.hypot(x - last_sent_xy[0], y - last_sent_xy[1]), args.max_speed * dt
                         if step > cap:
                             x = last_sent_xy[0] + (x - last_sent_xy[0]) * cap / step
