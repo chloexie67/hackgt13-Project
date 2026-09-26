@@ -5,5 +5,7 @@ for f in sys.argv[1:]:
     st = collections.Counter(x["state"] for x in r); n = len(r)
     fx = [(float(x["time_s"]), float(x["field_x_m"]), float(x["field_y_m"])) for x in r if x["field_x_m"]]
     jumps = sum(1 for a, b in zip(fx, fx[1:]) if b[0] - a[0] < 0.2 and np.hypot(b[1] - a[1], b[2] - a[2]) / (b[0] - a[0]) > 40)
+    px = [(int(x["frame"]), float(x["ball_px_x"]), float(x["ball_px_y"])) for x in r if x["ball_px_x"]]
+    pick_jumps = sum(1 for a, b in zip(px, px[1:]) if b[0] - a[0] <= 2 and np.hypot(b[1] - a[1], b[2] - a[2]) > 0.08 * 1280)
     print(f"{f:22s} live {st['live']/n:4.0%} coast {st['coasting']/n:4.0%} lost {st['lost']/n:4.0%} "
-          f"paused {st['paused']/n:4.0%} | field pos {len(fx)/n:4.0%} | >40 m/s jumps {jumps}")
+          f"paused {st['paused']/n:4.0%} | field pos {len(fx)/n:4.0%} | >40 m/s jumps {jumps} | ball-pick jumps {pick_jumps}")

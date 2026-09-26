@@ -105,6 +105,14 @@ def grass_ratio(frame: np.ndarray) -> float:
     return float(np.count_nonzero(mask)) / mask.size
 
 
+def promo_frame(frame: np.ndarray) -> bool:
+    """True when the match is shown shrunk inside the FIFA archive promo frame (flat blue panel
+    down the left edge). Mapping and detection are unreliable there, so it's treated like a replay."""
+    hsv = cv2.cvtColor(frame[:, :100], cv2.COLOR_BGR2HSV)
+    blue = (hsv[:, :, 0] >= 100) & (hsv[:, :, 0] <= 125) & (hsv[:, :, 1] > 120) & (hsv[:, :, 2] > 30)
+    return float(blue.mean()) > 0.5
+
+
 # ---------------------------------------------------------------------------
 # 2. Ball detection
 # ---------------------------------------------------------------------------
@@ -123,7 +131,7 @@ class BallDetector:
         self.person_ids = [i for i, n in names.items() if n.lower() == "person"]
 
     def detect(self, frame):
-        """Return (ball candidates as (cx, cy, bottom_y, conf), people boxes as (x1, y1, x2, y2)).
+        """Return (ball candidates as (cx, cy, bottom_y, conf, w, h), people boxes as (x1, y1, x2, y2)).
 
         People are empty when the model has no person class.
         """
@@ -137,40 +145,139 @@ class BallDetector:
         for (x1, y1, x2, y2), c, k in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy(),
                                          r.boxes.cls.cpu().numpy()):
             if int(k) in self.class_ids:
-                balls.append((float(x1 + x2) / 2, float(y1 + y2) / 2, float(y2), float(c)))
+                balls.append((float(x1 + x2) / 2, float(y1 + y2) / 2, float(y2), float(c),
+                              float(x2 - x1), float(y2 - y1)))
             elif c >= 0.4:
                 people.append((float(x1), float(y1), float(x2), float(y2)))
         return balls, people
 
 
-REACQUIRE_CONF = 0.5     # a candidate this confident may jump anywhere...
-REACQUIRE_MARGIN = 0.25  # ...if it also beats the in-range candidate by this much
+BALL_DIAMETER_M = 0.22
+MAX_ASPECT = 1.6          # a ball's box is roughly square (motion blur stretches it a little)
+SIZE_RANGE = (0.5, 4.0)   # box size vs the expected size of a ball on the grass at that spot;
+                          # generous above: a lofted ball is closer to the camera, and
+                          # detector boxes run ~1.5x the ball itself
 
 
-def select_candidate(cands, last_px, limit):
-    """Pick the detection that best balances confidence against distance from the last position.
+MAX_BALL_SATURATION = 85  # the ball's bright pixels are white; neon boots are strongly coloured
 
-    Rejects low-confidence candidates that jumped further than physically plausible, which
-    filters out heads, socks and crowd false positives. A clearly more confident candidate
-    outside that range wins anyway, so the tracker can recover after locking onto a false one.
-    """
-    if not cands:
-        return None
-    strongest = max(cands, key=lambda c: c[3])
-    if last_px is None:
-        return strongest
-    best, best_score = None, -np.inf
+
+def bright_saturation(frame, c):
+    """Median saturation (0-255) of the brightest quarter of pixels in a candidate's box."""
+    cx, cy, w, h = c[0], c[1], c[4], c[5]
+    x1, y1 = max(int(cx - w / 2), 0), max(int(cy - h / 2), 0)
+    crop = frame[y1:int(cy + h / 2) + 1, x1:int(cx + w / 2) + 1]
+    if crop.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).reshape(-1, 3).astype(float)
+    top = hsv[hsv[:, 2] >= np.percentile(hsv[:, 2], 75)]
+    return float(np.median(top[:, 1]))
+
+
+def plausible_balls(cands, H, frame=None, allow_off_pitch=False, off_pitch_margin=0.5):
+    """Drop candidates that can't be the ball: elongated boxes (boots), strongly coloured
+    ones (neon boots; the ball is white), and, where the pitch mapping is known, boxes far
+    too small or large for a 22 cm ball at that spot, or lying outside the pitch lines
+    (spare balls behind the goal, ad boards). allow_off_pitch while the ball is in the air,
+    where its ground projection can fall outside the pitch."""
+    out = []
+    Hinv = np.linalg.inv(H) if H is not None else None
     for c in cands:
-        d = np.hypot(c[0] - last_px[0], c[1] - last_px[1])
-        if d > limit:
+        w, h = c[4], c[5]
+        if max(w, h) > MAX_ASPECT * max(min(w, h), 1.0):
             continue
-        score = c[3] - 0.5 * d / limit
-        if score > best_score:
-            best, best_score = c, score
-    reacquire = max(REACQUIRE_CONF, best[3] + REACQUIRE_MARGIN) if best else REACQUIRE_CONF
-    if strongest is not best and strongest[3] >= reacquire:
-        return strongest
-    return best
+        if frame is not None and bright_saturation(frame, c) > MAX_BALL_SATURATION:
+            continue
+        if Hinv is not None:
+            gx, gy = to_pitch(H, c[0], c[2])
+            if not allow_off_pitch and not on_pitch(gx, gy, margin=off_pitch_margin):
+                continue
+            if on_pitch(gx, gy):
+                r = BALL_DIAMETER_M / 2
+                pts = cv2.perspectiveTransform(np.float32([[[gx - r, gy], [gx + r, gy], [gx, gy - r], [gx, gy + r]]]), Hinv)[0]
+                expected = max(np.linalg.norm(pts[1] - pts[0]), np.linalg.norm(pts[3] - pts[2]))
+                if not SIZE_RANGE[0] * expected <= max(w, h) <= SIZE_RANGE[1] * expected:
+                    continue
+        out.append(c)
+    return out
+
+
+class BallSelector:
+    """Chooses which detection is the ball, and refuses one-frame jumps.
+
+    A candidate is accepted straight away only if it is where the ball can plausibly be:
+      * within the Kalman filter's uncertainty around the predicted ground position
+        (the area grows while the ball is unseen and shrinks when tracking is steady), or
+      * within a screen distance of the last sighting that grows with the time since it
+        (covers a ball kicked into the air, whose ground position is meaningless).
+    Anything else must earn it: it becomes a "challenger" and replaces the current ball
+    only after it has been seen confirm_n frames in a row moving plausibly, and, if the
+    current ball is still being seen, only if it is clearly more confident.
+    With nothing tracked (start, after a cut or a long loss), every new ball needs that
+    confirmation, so a single false hit anywhere on screen can never win.
+    """
+
+    def __init__(self, width, max_jump=0.6, gate_chi2=9.21, confirm_n=3, min_conf=0.25,
+                 switch_margin=0.2, forget_s=3.0):
+        self.max_jump_px_s = max_jump * width
+        self.gate_chi2, self.confirm_n, self.min_conf = gate_chi2, confirm_n, min_conf
+        self.switch_margin, self.forget_s = switch_margin, forget_s
+        self.forget()
+
+    def forget(self):
+        """Nothing tracked any more (cut, close-up): the next ball must be confirmed."""
+        self.confirmed_track = []
+        self.last_px = self.last_t = None
+        self.conf_ema = 0.0
+        self.challenger = None   # {"px", "t", "n", "conf"}
+
+    def _limit(self, dt):
+        return self.max_jump_px_s * max(dt, 1 / 30)
+
+    def choose(self, cands, t, kf, H):
+        """Returns (candidate or None, switched). switched=True means the ball was
+        re-acquired somewhere new, so the caller should restart its filters."""
+        if self.last_t is not None and t - self.last_t > self.forget_s:
+            self.forget()
+
+        in_gate, out_gate = [], []
+        for c in cands:
+            dn = np.inf  # distance as a fraction of the allowed distance
+            if self.last_px is not None:
+                dn = np.hypot(c[0] - self.last_px[0], c[1] - self.last_px[1]) / self._limit(t - self.last_t)
+            if kf.x is not None and H is not None:
+                gx, gy = to_pitch(H, c[0], c[2])
+                dn = min(dn, np.sqrt(kf.gate_distance2((gx, gy)) / self.gate_chi2))
+            (in_gate if dn <= 1 else out_gate).append((c[3] - 0.5 * min(dn, 1), c))
+
+        best = max(in_gate, key=lambda sc: sc[0])[1] if in_gate else None
+        switched = False
+
+        # challengers: the strongest candidate outside the gate, followed frame to frame
+        strong = [c for _, c in out_gate if c[3] >= self.min_conf]
+        ch = self.challenger
+        if ch is not None and t - ch["t"] > 0.15:
+            ch = None  # not seen again: it was a one-off
+        if strong:
+            c = max(strong, key=lambda c: c[3])
+            if ch is not None and np.hypot(c[0] - ch["px"][0], c[1] - ch["px"][1]) <= self._limit(t - ch["t"]):
+                ch = {"px": c[:2], "t": t, "n": ch["n"] + 1, "conf": ch["conf"] + c[3], "cand": c,
+                      "seen": ch["seen"] + [(t, c)]}
+            else:
+                ch = {"px": c[:2], "t": t, "n": 1, "conf": c[3], "cand": c, "seen": [(t, c)]}
+        self.challenger = ch
+
+        if ch is not None and ch["t"] == t and ch["n"] >= self.confirm_n:
+            avg = ch["conf"] / ch["n"]
+            if best is None or avg >= self.conf_ema + self.switch_margin:
+                best, switched = ch["cand"], True
+                self.confirmed_track = ch["seen"][:-1]  # earlier sightings, e.g. for the air test
+                self.challenger = None
+
+        if best is not None:
+            self.conf_ema = best[3] if switched or self.last_px is None else 0.8 * self.conf_ema + 0.2 * best[3]
+            self.last_px, self.last_t = best[:2], t
+        return best, switched
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +475,7 @@ class AirDetector:
     after max_air_s.
     """
 
-    def __init__(self, window_s=0.4, min_samples=8, air_accel=(6.0, 20.0), land_accel=3.0,
+    def __init__(self, window_s=0.4, min_samples=8, air_accel=(6.0, 25.0), land_accel=3.0,
                  max_rms_m=0.15, max_gap_s=0.12, max_air_s=3.0, min_rise=2.0):
         self.window_s, self.min_samples = window_s, min_samples
         self.air_accel, self.land_accel, self.max_rms_m = air_accel, land_accel, max_rms_m
@@ -428,25 +535,40 @@ class AirDetector:
 class BallKalman:
     """Constant-velocity Kalman filter over pitch coordinates. State = [x, y, vx, vy] (m, m/s)."""
 
-    def __init__(self, accel_std=8.0, meas_std=1.5):
+    def __init__(self, accel_std=25.0, meas_std=0.15, maneuver=False, kick_nis=13.8, kick_vel_std=10.0):
+        """meas_std: error of one mapped ground position (measured ~0.1 m with PnLCalib).
+        maneuver: kick detection. A measurement far outside what the prediction expects
+        (squared Mahalanobis distance > kick_nis, 99.9% for 2 dof) means the ball was struck;
+        the velocity uncertainty is then widened by kick_vel_std so the estimate follows the
+        new speed at once instead of ramping up over several frames."""
         self.accel_std = accel_std
+        self.maneuver, self.kick_nis, self.kick_vel_std = maneuver, kick_nis, kick_vel_std
         self.Hm = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], float)
         self.R = np.eye(2) * meas_std ** 2
         self.x = None
         self.P = None
+        self.age = 0.0
 
     def reset(self):
         self.x = self.P = None
+        self.age = 0.0  # seconds followed since the last restart; velocity needs a little history
 
     def predict(self, dt):
         """Advance the state by dt seconds (frames can be unevenly spaced when running live)."""
         if self.x is None:
             return None
+        self.age += dt
         F = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]], float)
         G = np.array([[dt * dt / 2, 0], [0, dt * dt / 2], [dt, 0], [0, dt]])
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + G @ G.T * self.accel_std ** 2
         return self.x
+
+    def gate_distance2(self, z):
+        """Squared Mahalanobis distance of a measurement from the prediction (chi-square, 2 dof)."""
+        y = np.asarray(z, float) - self.x[:2]
+        S = self.P[:2, :2] + self.R
+        return float(y @ np.linalg.solve(S, y))
 
     def update(self, z):
         z = np.asarray(z, float)
@@ -456,6 +578,9 @@ class BallKalman:
             return self.x
         y = z - self.Hm @ self.x
         S = self.Hm @ self.P @ self.Hm.T + self.R
+        if self.maneuver and float(y @ np.linalg.solve(S, y)) > self.kick_nis:
+            self.P[2:, 2:] += np.eye(2) * self.kick_vel_std ** 2
+            S = self.Hm @ self.P @ self.Hm.T + self.R
         K = self.P @ self.Hm.T @ np.linalg.inv(S)
         self.x = self.x + K @ y
         self.P = (np.eye(4) - K @ self.Hm) @ self.P
@@ -500,7 +625,9 @@ def draw_radar(frame, ball_xy, state):
 
 def annotate(frame, rec, px, ball_xy):
     if px is not None:
-        cv2.circle(frame, (int(px[0]), int(px[1])), 14, (0, 255, 255), 2)
+        # yellow = position sent to the device; grey = followed but not sent (uncertain, air)
+        sent = rec["field_x_m"] != ""
+        cv2.circle(frame, (int(px[0]), int(px[1])), 14, (0, 255, 255) if sent else (150, 150, 150), 2)
     label = f"{rec['state']}"
     if rec["field_x_m"] != "":
         label += f"  x={rec['field_x_m']:.1f}m y={rec['field_y_m']:.1f}m"
@@ -516,7 +643,17 @@ CSV_FIELDS = ["frame", "time_s", "state", "confidence",
               # *_norm: the same scaled to -1..1 (goal line / touchline = +-1).
               "field_x_m", "field_y_m", "field_vx_ms", "field_vy_ms",
               "field_x_norm", "field_y_norm", "has_homography",
-              "air_accel_ms2"]  # the in-the-air test's measured acceleration, for tuning
+              "air_accel_ms2",   # the in-the-air test's measured acceleration, for tuning
+              "track_conf",      # recent confidence of the tracked ball (reporting threshold)
+              "n_detected", "n_plausible",  # ball candidates from the detector / after the filters
+              "raw_x_m", "raw_y_m", "kf_restart",  # unsmoothed ground position (centre origin); 1 = filter restarted
+              # motor signal (motor_speed.py): one clean speed profile per pass, for the haptics.
+              # It lags by --motor-delay: these values describe the ball at time motor_t.
+              "motor_t", "motor_speed_ms", "motor_vx_ms", "motor_vy_ms", "motor_touch",
+              # live pass profile (live_passes.py): velocity the motors should have NOW, and the
+              # pass being followed (start time, start velocity, slow-down); new_pass=1 when announced
+              "live_vx_ms", "live_vy_ms", "live_speed_ms",
+              "pass_t0", "pass_vx0_ms", "pass_vy0_ms", "pass_decel_ms2", "new_pass"]
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +825,10 @@ def run(args):
         pitch = PitchMapper(args.pitch_weights, device, args.kp_conf, args.hold_frames, precision)
     kf = BallKalman()
     air = AirDetector()
+    from motor_speed import MotorSpeed
+    motor = MotorSpeed(delay=args.motor_delay)
+    from live_passes import LivePasses
+    live_passes = LivePasses(mode=args.pass_mode)
 
     default_csv = "live.ball.csv" if live else Path(name).with_suffix(".ball.csv")
     out_csv = Path(args.out_csv or default_csv)
@@ -705,10 +846,11 @@ def run(args):
         host, port = args.udp.rsplit(":", 1)
         udp = (socket.socket(socket.AF_INET, socket.SOCK_DGRAM), (host, int(port)))
 
-    # max plausible ball movement on screen per second (~ a hard shot)
-    max_jump_px_s = args.max_jump * width
+    selector = BallSelector(width, max_jump=args.max_jump, confirm_n=args.confirm)
 
     last_px, missed_s, t_prev = None, 0.0, None
+    out_xy = None  # last reported position (pitch metres), for the speed cap
+    last_ground_t = None  # when the filter last got a mapped ground position
     calm = args.resume_frames  # consecutive processed frames that looked like gameplay
     processed = 0
     t_start = time.time()
@@ -725,7 +867,7 @@ def run(args):
             rec.update(frame=idx, time_s=round(t, 3), has_homography=0)
             px = None
 
-            gameplay = grass_ratio(frame) >= args.min_grass
+            gameplay = grass_ratio(frame) >= args.min_grass and not promo_frame(frame)
             balls, people = detector.detect(frame) if gameplay else ([], [])
             tallest = max(((b[3] - b[1]) / height for b in people), default=0.0)
             # stay paused until the wide shot has held for a few frames (avoids flicker at cuts)
@@ -739,6 +881,7 @@ def run(args):
                 if tracker is not None:
                     tracker.reset()
                 air.reset()
+                selector.forget()
                 last_px, missed_s = None, 0.0
             else:
                 H = None
@@ -749,11 +892,14 @@ def run(args):
                 rec["has_homography"] = int(H is not None)
 
                 kf.predict(dt)
-                # the allowed on-screen jump grows with the time since the ball was last seen
-                cand = select_candidate(balls, last_px, max_jump_px_s * (missed_s + dt))
+                rec["n_detected"] = len(balls)
+                balls = plausible_balls(balls, H, frame, allow_off_pitch=air.airborne,
+                                        off_pitch_margin=args.off_pitch_margin)
+                rec["n_plausible"] = len(balls)
+                cand, switched = selector.choose(balls, t, kf, H)
 
                 if cand is not None:
-                    cx, cy, bottom, conf = cand
+                    cx, cy, bottom, conf = cand[:4]
                     prev_px, missed_s_before = last_px, missed_s
                     px, last_px, missed_s = (cx, cy), (cx, cy), 0.0
                     rec.update(state="live", confidence=round(conf, 3),
@@ -768,9 +914,19 @@ def run(args):
                     y_stab = cy
                     if tracker is not None:
                         y_stab = cv2.perspectiveTransform(np.float32([[[cx, cy]]]), np.linalg.inv(tracker.cum))[0, 0, 1]
-                    if prev_px is None or missed_s_before > 0 or \
+                    if switched or prev_px is None or missed_s_before > 0 or \
                             np.hypot(cx - prev_px[0], cy - prev_px[1]) > 0.08 * width:
                         air.break_track()  # not a continuous trajectory
+                    if switched:
+                        # the frames it spent being confirmed are part of its trajectory
+                        # (camera motion over those few frames is ignored)
+                        for t_seen, c_seen in selector.confirmed_track:
+                            y_seen = c_seen[1]
+                            if tracker is not None:
+                                y_seen = cv2.perspectiveTransform(np.float32([[c_seen[:2]]]),
+                                                                  np.linalg.inv(tracker.cum))[0, 0, 1]
+                            air.update(t_seen, float(y_seen), vertical_scale(people, c_seen[0], c_seen[1]),
+                                       on_ground=at_feet(people, c_seen[0], c_seen[1]))
                     was_airborne = air.airborne
                     airborne = air.update(t, float(y_stab), vertical_scale(people, cx, cy),
                                           on_ground=at_feet(people, cx, cy))
@@ -780,16 +936,19 @@ def run(args):
                         rec["state"] = "air"
                         kf.reset()
                     elif ground is not None:
-                        if was_airborne or (kf.x is not None and
-                                            np.hypot(ground[0] - kf.x[0], ground[1] - kf.x[1]) > args.max_field_jump):
-                            kf.reset()  # just landed, or re-acquired elsewhere: start from here
+                        if was_airborne or switched:
+                            kf.reset()  # just landed, or confirmed re-acquisition elsewhere: start here
+                        rec.update(raw_x_m=round(ground[0] - PITCH_LENGTH / 2, 3),
+                                   raw_y_m=round(ground[1] - PITCH_WIDTH / 2, 3), kf_restart=int(kf.x is None))
                         kf.update(ground)
+                        last_ground_t = t
                 elif air.airborne and t - air.since <= air.max_air_s:
                     missed_s += dt
                     rec["state"] = "air"  # often lost against the crowd mid-flight
                 else:
                     missed_s += dt
                     if missed_s > args.max_coast:
+                        # the selector keeps the last sighting: the search widens from there
                         rec["state"] = "lost"
                         kf.reset()
                         air.reset()
@@ -797,16 +956,56 @@ def run(args):
                     else:
                         rec["state"] = "coasting"
 
-                if kf.x is not None and rec["state"] in ("live", "coasting"):
+                # weak tracks (recent pick confidence low: often a boot) are still followed, but
+                # not reported, so the device doesn't act on them
+                if rec["state"] in ("live", "coasting"):
+                    rec["track_conf"] = round(selector.conf_ema, 3)
+                if rec["state"] in ("live", "coasting") and selector.conf_ema < args.min_report_conf:
+                    rec["state"] = "uncertain"
+                # without a fresh mapped sighting the filter's position is stale: don't send it
+                if rec["state"] in ("live", "coasting") and (last_ground_t is None or t - last_ground_t > args.max_coast):
+                    rec["state"] = "unmapped" if H is None else rec["state"]
+                if kf.x is not None and rec["state"] in ("live", "coasting") and \
+                        last_ground_t is not None and t - last_ground_t <= args.max_coast:
                     x, y, vx, vy = kf.x
                     x, y = float(np.clip(x, 0, PITCH_LENGTH)), float(np.clip(y, 0, PITCH_WIDTH))
+                    if out_xy is not None:
+                        # never faster than a real ball: a re-acquired position is glided to
+                        step, cap = np.hypot(x - out_xy[0], y - out_xy[1]), args.max_speed * dt
+                        if step > cap:
+                            x, y = out_xy[0] + (x - out_xy[0]) * cap / step, out_xy[1] + (y - out_xy[1]) * cap / step
+                    out_xy = (x, y)
                     # reported relative to the centre spot: x in [-52.5, 52.5], y in [-34, 34]
                     x, y = x - PITCH_LENGTH / 2, y - PITCH_WIDTH / 2
+                    # velocity only once the filter has followed the ball for a moment since
+                    # restarting; before that it's a guess from a few noisy points
+                    settled = kf.age >= args.min_vel_age
                     rec.update(field_x_m=round(x, 2), field_y_m=round(y, 2),
-                               field_vx_ms=round(float(vx), 2), field_vy_ms=round(float(vy), 2),
+                               field_vx_ms=round(float(vx), 2) if settled else "",
+                               field_vy_ms=round(float(vy), 2) if settled else "",
                                field_x_norm=round(x / (PITCH_LENGTH / 2), 4),
                                field_y_norm=round(y / (PITCH_WIDTH / 2), 4))
 
+            if rec["field_x_m"] == "":
+                out_xy = None  # no position this frame: the next one starts fresh
+            raw_xy = (rec["raw_x_m"], rec["raw_y_m"]) if rec["raw_x_m"] != "" else None
+            ev = live_passes.push(t, raw_xy, rec["kf_restart"] == 1)
+            lv = live_passes.velocity(t)
+            if rec["state"] in ("paused", "lost", "unmapped"):
+                lv = None  # nothing reliable to follow right now
+            if lv is not None:
+                p_ = live_passes.pass_
+                rec.update(live_vx_ms=round(lv[0], 2), live_vy_ms=round(lv[1], 2),
+                           live_speed_ms=round(float(np.hypot(*lv)), 2), pass_t0=round(p_["t0"], 3),
+                           pass_vx0_ms=round(float(p_["v0"][0]), 2), pass_vy0_ms=round(float(p_["v0"][1]), 2),
+                           pass_decel_ms2=live_passes.decel if args.pass_mode == "profile" else 0.0)
+            rec["new_pass"] = int(ev is not None)
+            for m in motor.push(t, raw_xy, rec["kf_restart"] == 1):
+                rec.update(motor_t=round(m["t"], 3),
+                           motor_speed_ms="" if m["speed"] is None else round(m["speed"], 2),
+                           motor_vx_ms="" if m["vx"] is None else round(m["vx"], 2),
+                           motor_vy_ms="" if m["vy"] is None else round(m["vy"], 2),
+                           motor_touch=int(m["touch"]))
             writer.writerow(rec)
 
             if udp is not None:
@@ -816,7 +1015,16 @@ def run(args):
                        "x": val("field_x_norm"), "y": val("field_y_norm"),
                        "vx": val("field_vx_ms"), "vy": val("field_vy_ms"),
                        "sx": val("screen_x"), "sy": val("screen_y"),
-                       "confidence": val("confidence")}
+                       "confidence": val("confidence"),
+                       # for the motors: speed profile per pass, describing the ball at motor_t
+                       "motor_t": val("motor_t"), "motor_speed": val("motor_speed_ms"),
+                       "motor_vx": val("motor_vx_ms"), "motor_vy": val("motor_vy_ms"),
+                       "touch": val("motor_touch"),
+                       # live pass profile: velocity for the motors now + the pass it comes from
+                       "live_vx": val("live_vx_ms"), "live_vy": val("live_vy_ms"),
+                       "live_speed": val("live_speed_ms"), "new_pass": val("new_pass"),
+                       "pass_t0": val("pass_t0"), "pass_vx0": val("pass_vx0_ms"),
+                       "pass_vy0": val("pass_vy0_ms"), "pass_decel": val("pass_decel_ms2")}
                 udp[0].sendto(json.dumps(msg).encode(), udp[1])
 
             if video_out is not None or args.show:
@@ -859,9 +1067,10 @@ def run(args):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("source", help="video file, YouTube URL, 'screen', or a camera index (e.g. 0 for OBS Virtual Camera)")
-    p.add_argument("--ball-weights", default="yolo11m.pt",
-                   help="YOLO weights with a ball class (default: COCO yolo11m, auto-downloaded; "
-                        "COCO models also enable close-up detection)")
+    p.add_argument("--ball-weights",
+                   default="models/ball_person.pt" if Path("models/ball_person.pt").exists() else "yolo11m.pt",
+                   help="YOLO weights with 'ball' and 'person' classes (default: the team's fine-tuned "
+                        "models/ball_person.pt; falls back to COCO yolo11m)")
     p.add_argument("--pitch", choices=["pnl", "keypoints", "none"], default="pnl",
                    help="pitch mapping: pnl = PnLCalib landmarks + lines (accurate, default); "
                         "keypoints = roboflow/sports landmark model only (metres off); "
@@ -883,11 +1092,26 @@ def parse_args(argv=None):
     p.add_argument("--pitch-every", type=int, default=3,
                    help="--pitch keypoints: run the landmark model every Nth processed frame")
     p.add_argument("--hold-frames", type=int, default=10, help="reuse last homography this many frames")
-    p.add_argument("--max-coast", type=float, default=0.5, help="seconds to predict through before 'lost'")
-    p.add_argument("--max-jump", type=float, default=1.5,
+    p.add_argument("--max-coast", type=float, default=0.2, help="seconds to predict through before 'lost'")
+    p.add_argument("--max-jump", type=float, default=0.6,
                    help="max ball speed on screen, in frame-widths per second")
-    p.add_argument("--max-field-jump", type=float, default=15.0,
-                   help="metres; a detection further than this from the estimate restarts smoothing")
+    p.add_argument("--confirm", type=int, default=3,
+                   help="frames a ball seen somewhere unexpected must persist before it's accepted")
+    p.add_argument("--min-report-conf", type=float, default=0.20,
+                   help="positions are only reported while the tracked ball's recent detection "
+                        "confidence is at least this (state 'uncertain' otherwise)")
+    p.add_argument("--off-pitch-margin", type=float, default=0.5,
+                   help="metres; ball candidates mapped further outside the pitch lines are ignored "
+                        "(spare balls, ad boards)")
+    p.add_argument("--min-vel-age", type=float, default=0.2,
+                   help="seconds of tracking needed after a restart before velocity is reported")
+    p.add_argument("--pass-mode", choices=["profile", "constant"], default="profile",
+                   help="live pass output: 'profile' = start speed slowing at a standard rate; "
+                        "'constant' = one fixed speed per pass (start speed x typical ratio)")
+    p.add_argument("--motor-delay", type=float, default=0.15,
+                   help="seconds of look-ahead for the motor speed signal (it lags by this much)")
+    p.add_argument("--max-speed", type=float, default=35.0,
+                   help="m/s; the reported position never moves faster than this")
     p.add_argument("--max-person", type=float, default=0.3,
                    help="a person taller than this fraction of the frame means close-up (COCO models only)")
     p.add_argument("--resume-frames", type=int, default=8,
