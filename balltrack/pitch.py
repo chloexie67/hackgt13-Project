@@ -47,38 +47,33 @@ PITCH_VERTICES = np.array([
 
 
 def _pitch_line_samples(step=0.75):
-    """Points along every painted pitch line (metres) with their unit tangent and a line id."""
+    """Points along every painted pitch line (metres), with the id of the line each is on."""
     L, W = PITCH_LENGTH, PITCH_WIDTH
-    segs = [((0, 0), (L, 0)), ((0, W), (L, W)), ((0, 0), (0, W)), ((L, 0), (L, W)),
+    segments = [((0, 0), (L, 0)), ((0, W), (L, W)), ((0, 0), (0, W)), ((L, 0), (L, W)),
             ((L / 2, 0), (L / 2, W))]
     for x0, sgn in ((0, 1), (L, -1)):
         for bw, bl in ((PENALTY_BOX_WIDTH, PENALTY_BOX_LENGTH), (GOAL_BOX_WIDTH, GOAL_BOX_LENGTH)):
             y0, y1, x1 = (W - bw) / 2, (W + bw) / 2, x0 + sgn * bl
-            segs += [((x0, y0), (x1, y0)), ((x0, y1), (x1, y1)), ((x1, y0), (x1, y1))]
-    pts, tans, ids = [], [], []
-    for i, (a, b) in enumerate(segs):
+            segments += [((x0, y0), (x1, y0)), ((x0, y1), (x1, y1)), ((x1, y0), (x1, y1))]
+    pts, ids = [], []
+    for i, (a, b) in enumerate(segments):
         a, b = np.array(a, float), np.array(b, float)
         n = max(2, int(np.linalg.norm(b - a) / step))
-        t = (b - a) / np.linalg.norm(b - a)
         for s in np.linspace(0, 1, n):
-            pts.append(a + s * (b - a)); tans.append(t); ids.append(i)
+            pts.append(a + s * (b - a))
+            ids.append(i)
     n = int(2 * np.pi * CIRCLE_RADIUS / step)
     for k, ang in enumerate(np.linspace(0, 2 * np.pi, n, endpoint=False)):
         pts.append((L / 2 + CIRCLE_RADIUS * np.cos(ang), W / 2 + CIRCLE_RADIUS * np.sin(ang)))
-        tans.append((-np.sin(ang), np.cos(ang)))
-        ids.append(len(segs) + k * 8 // n)  # split the circle into 8 arcs for the spread check
-    return np.array(pts, np.float32), np.array(tans, np.float32), np.array(ids)
+        ids.append(len(segments) + k * 8 // n)  # the circle counts as 8 arcs
+    return np.array(pts, np.float32), np.array(ids)
 
 
-LINE_PTS, LINE_TANS, LINE_IDS = _pitch_line_samples()
+LINE_PTS, LINE_IDS = _pitch_line_samples()
 
 
 def line_mask(frame):
-    """Painted pitch lines: thin, bright, low-saturation structures surrounded by grass.
-
-    White kits pass the colour test too, so anything thicker than a line (a shirt, shorts)
-    is removed, along with everything off the grass (crowd, ad boards).
-    """
+    """Painted pitch lines: thin, bright, low-saturation pixels on grass (kits are too thick)."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     tophat = cv2.morphologyEx(hsv[:, :, 2], cv2.MORPH_TOPHAT,
                               cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11)))
@@ -91,12 +86,8 @@ def line_mask(frame):
 
 
 def line_score(H, dist, min_visible=40, tol_px=3.0):
-    """How well a homography's projected pitch lines sit on the detected lines.
-
-    Fraction of in-frame projected line samples within tol_px of a detected line pixel;
-    higher is better (lines hidden behind players just lower it a little). None if too
-    little of the pitch lands in frame.
-    """
+    """Share of in-frame projected pitch-line points within tol_px of a detected line,
+    or None if too little of the pitch is in view."""
     h, w = dist.shape
     try:
         img = cv2.perspectiveTransform(LINE_PTS[None], np.linalg.inv(H))[0]

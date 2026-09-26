@@ -1,6 +1,6 @@
 """Replay recorded raw ground positions through Kalman filter variants and compare their
 velocity with a lag-free reference (local quadratic fit using frames before and after).
-Usage: python tune_kalman.py results/cx_raw.csv"""
+Usage: python -m tools.tune_kalman results/cx_raw.csv"""
 import csv, sys
 import numpy as np
 from balltrack.kalman import BallKalman
@@ -13,7 +13,6 @@ restart = np.array([x["kf_restart"] == "1" for x in r])
 ref = np.full(len(t), np.nan)  # lag-free speed reference
 for i in range(len(t)):
     m = abs(t - t[i]) <= 0.2
-    seg = np.cumsum(restart[m])  # don't fit across a restart
     if m.sum() >= 7 and not restart[m][1:].any():
         tt = t[m] - t[i]
         ref[i] = np.hypot(*[np.polyfit(tt, P[m, k], 2)[1] for k in range(2)])

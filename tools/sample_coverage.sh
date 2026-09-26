@@ -1,6 +1,6 @@
 #!/bin/bash
 # Estimate whole-game coverage: run the tracker on N evenly spaced stretches of a video.
-# Usage: ./sample_coverage.sh VIDEO N SECONDS
+# Usage: tools/sample_coverage.sh VIDEO N SECONDS  (from the repository root)
 video=$1; n=${2:-10}; secs=${3:-30}
 dur=$(.venv/bin/python -c "import cv2;c=cv2.VideoCapture('$video');print(int(c.get(7)/c.get(5)))")
 mkdir -p results/sample

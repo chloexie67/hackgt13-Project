@@ -1,5 +1,5 @@
 """Diagnostic from the team: raw best.pt inference exactly as in Colab (no tracking, filtering,
-calibration or half precision). Usage: python raw_yolo_test.py VIDEO START_S DURATION_S OUT.mp4"""
+calibration or half precision). Usage: python -m tools.raw_yolo_test VIDEO START_S DURATION_S OUT.mp4"""
 import sys
 import cv2
 from ultralytics import YOLO

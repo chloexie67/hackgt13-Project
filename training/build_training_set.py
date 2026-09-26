@@ -1,16 +1,10 @@
-"""Combine labelled YOLO exports into one training folder for Colab.
+"""Merge labelled YOLO exports into one training folder.
 
-* Every source must already use the model's class order (0 = person, 1 = ball); run
-  remap_classes.py first on exports where Roboflow reordered them.
-* --unstretch W H resizes a source's images back to their true shape. Roboflow's "Resize"
-  preprocessing had squashed the broadcast frames to 1280x1280; YOLO labels are fractions of
-  the image size, so they stay correct after resizing.
-* Each source's train/valid/test splits are kept apart (test stays a held-out set).
+Sources must use the model's class order (run training.remap_classes first). SRC:WxH resizes
+a source's images back to their true shape, for exports Roboflow squashed to squares; labels
+are fractions of the image, so they stay valid.
 
-Usage:
-  python build_training_set.py OUT SRC[:WxH] [SRC[:WxH] ...]
-  python build_training_set.py training_set labeled/broadcast_v1:1280x720 labeled/tactical_part_ready
-Output: OUT/ (+ OUT.zip) with train/, valid/, test/ and data.yaml.
+Usage: python -m training.build_training_set OUT SRC[:WxH] [SRC[:WxH] ...]
 """
 import shutil
 import sys

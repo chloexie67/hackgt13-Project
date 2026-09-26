@@ -85,32 +85,6 @@ def open_source(args):
     return FileSource(path, args.start, args.duration, args.stride, args.realtime), path
 
 
-def build_pitch_mapping(args, device, precision, live):
-    """Returns (pitch_tracker, keypoint_mapper); at most one is set, per --pitch."""
-    if args.pitch == "pnl":
-        background = live or args.realtime
-        # live: calibrate on the CPU so the ball detector never waits for the GPU
-        calib_device = args.calib_device or ("cpu" if background else device)
-        # camera tracking holds ~6 s from one calibration; CPU calibrations arrive ~3 s late
-        tracker = PitchTracker(FieldCalibrator(device=calib_device), interval=args.calib_interval,
-                               async_=background, max_stale=6.0 if calib_device == "cpu" else 4.0)
-        return tracker, None
-    if args.pitch == "keypoints":
-        return None, KeypointPitchMapper(args.pitch_weights, device, args.kp_conf, args.hold_frames, precision)
-    return None, None
-
-
-def stabilised_y(pitch_tracker, x, y):
-    """Image height of (x, y) with camera motion removed (for the in-the-air test)."""
-    if pitch_tracker is None:
-        return y
-    return cv2.perspectiveTransform(np.float32([[[x, y]]]), np.linalg.inv(pitch_tracker.cum))[0, 0, 1]
-
-
-def udp_message(row):
-    return json.dumps({key: (None if row[col] == "" else row[col]) for key, col in UDP_FIELDS.items()}).encode()
-
-
 def run(args):
     source, name = open_source(args)
     width, height = source.size
@@ -121,7 +95,16 @@ def run(args):
     print(f"{name}: {width}x{height} @ {source.fps:.1f} fps, device={device}, fp{precision}")
 
     detector = BallDetector(args.ball_weights, device, args.imgsz, args.conf, precision)
-    pitch_tracker, keypoint_mapper = build_pitch_mapping(args, device, precision, live)
+    pitch_tracker = keypoint_mapper = None
+    if args.pitch == "pnl":
+        background = live or args.realtime
+        # live: calibrate on the CPU so the ball detector never waits for the GPU
+        calib_device = args.calib_device or ("cpu" if background else device)
+        # camera tracking holds ~6 s from one calibration; CPU calibrations arrive ~3 s late
+        pitch_tracker = PitchTracker(FieldCalibrator(device=calib_device), interval=args.calib_interval,
+                                     async_=background, max_stale=6.0 if calib_device == "cpu" else 4.0)
+    elif args.pitch == "keypoints":
+        keypoint_mapper = KeypointPitchMapper(args.pitch_weights, device, args.kp_conf, args.hold_frames, precision)
     selector = BallSelector(width, max_jump=args.max_jump, confirm_n=args.confirm)
     ball_kf = BallKalman()
     flight = AirDetector()
@@ -207,15 +190,23 @@ def run(args):
                     if switched or prev_px is None or missed_before > 0 or \
                             np.hypot(cx - prev_px[0], cy - prev_px[1]) > 0.08 * width:
                         flight.break_track()
+                    # height on screen with camera motion removed, for the gravity test
+                    y_stable = cy
+                    if pitch_tracker is not None:
+                        y_stable = cv2.perspectiveTransform(np.float32([[[cx, cy]]]),
+                                                            np.linalg.inv(pitch_tracker.cum))[0, 0, 1]
                     if switched:
                         # the frames spent confirming the new ball are part of its trajectory
                         for t_seen, seen in selector.confirmed_track:
-                            flight.update(t_seen, float(stabilised_y(pitch_tracker, seen[0], seen[1])),
-                                          vertical_scale(people, seen[0], seen[1]),
+                            y_seen = seen[1]
+                            if pitch_tracker is not None:
+                                y_seen = cv2.perspectiveTransform(np.float32([[seen[:2]]]),
+                                                                  np.linalg.inv(pitch_tracker.cum))[0, 0, 1]
+                            flight.update(t_seen, float(y_seen), vertical_scale(people, seen[0], seen[1]),
                                           on_ground=at_feet(people, seen[0], seen[1]))
                     was_airborne = flight.airborne
-                    airborne = flight.update(t, float(stabilised_y(pitch_tracker, cx, cy)),
-                                             vertical_scale(people, cx, cy), on_ground=at_feet(people, cx, cy))
+                    airborne = flight.update(t, float(y_stable), vertical_scale(people, cx, cy),
+                                             on_ground=at_feet(people, cx, cy))
                     row["air_accel_ms2"] = "" if flight.accel is None else round(flight.accel, 2)
                     if airborne:
                         row["state"] = "air"  # ground projection is wrong in the air
@@ -273,7 +264,7 @@ def run(args):
             if row["state"] in ("paused", "lost", "unmapped"):
                 motor_velocity = None
             if motor_velocity is not None:
-                current_pass = live_passes.pass_
+                current_pass = live_passes.current_pass
                 row.update(live_vx_ms=round(motor_velocity[0], 2), live_vy_ms=round(motor_velocity[1], 2),
                            live_speed_ms=round(float(np.hypot(*motor_velocity)), 2),
                            pass_t0=round(current_pass["t0"], 3),
@@ -289,7 +280,8 @@ def run(args):
                            motor_touch=int(sample["touch"]))
             writer.writerow(row)
             if udp_sock is not None:
-                udp_sock.sendto(udp_message(row), udp_addr)
+                message = {key: (None if row[col] == "" else row[col]) for key, col in UDP_FIELDS.items()}
+                udp_sock.sendto(json.dumps(message).encode(), udp_addr)
 
             if video_out is not None or args.show:
                 radar_xy = ((row["field_x_m"] + PITCH_LENGTH / 2, row["field_y_m"] + PITCH_WIDTH / 2)

@@ -1,6 +1,6 @@
 """Compare pitch mappings on fixed game-1 frames: overlay sheet + numeric check at 650 s.
 
-Usage: python eval_calib.py OUT.png [--no-refine]
+Usage: python -m tools.eval_calib OUT.png [--no-refine]
 """
 import sys, time, cv2, numpy as np
 from balltrack.pitch import LINE_PTS, line_coverage, line_mask, line_score

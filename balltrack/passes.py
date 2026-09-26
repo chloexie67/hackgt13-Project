@@ -1,15 +1,8 @@
-"""Split the tracked ball path into passes and give each pass ONE velocity for the motors.
+"""Split the ball path into passes and give each pass one velocity (recorded games).
 
-A pass (or any single ball movement between touches) is modelled as a straight line on the
-pitch travelled at a speed that stays level or falls (rolling friction), never rises. The raw
-ground positions are cut greedily into the longest pieces that fit that model; a piece ends when
-  * the path bends (points drift more than max_lateral_m from the straight line),
-  * the ball speeds up (fitted acceleration along the line above max_accel), i.e. a touch,
-  * the along-line fit gets poor (rms above max_rms_m), or
-  * tracking was interrupted (restart, or a gap longer than max_gap_s).
-Each pass gets one velocity: displacement from its start to its end divided by its duration,
-so driving the motors at that velocity moves them from the pass's start to its end on time.
-
+A pass is the longest run of raw ground positions that fits a straight line travelled at a
+speed that never rises. Its velocity is (end - start) / duration, so motors driven at it
+arrive where the ball stops, on time.
 """
 import csv
 

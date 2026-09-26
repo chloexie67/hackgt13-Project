@@ -5,11 +5,9 @@ class BallKalman:
     """Constant-velocity Kalman filter over pitch coordinates. State = [x, y, vx, vy] (m, m/s)."""
 
     def __init__(self, accel_std=25.0, meas_std=0.15, maneuver=False, kick_nis=13.8, kick_vel_std=10.0):
-        """meas_std: error of one mapped ground position (measured ~0.1 m with PnLCalib).
-        maneuver: kick detection. A measurement far outside what the prediction expects
-        (squared Mahalanobis distance > kick_nis, 99.9% for 2 dof) means the ball was struck;
-        the velocity uncertainty is then widened by kick_vel_std so the estimate follows the
-        new speed at once instead of ramping up over several frames."""
+        """meas_std: error of one mapped ground position (~0.1 m measured with PnLCalib).
+        maneuver: widen the velocity uncertainty by kick_vel_std when a measurement is far
+        outside the prediction (squared Mahalanobis distance > kick_nis), i.e. a kick."""
         self.accel_std = accel_std
         self.maneuver, self.kick_nis, self.kick_vel_std = maneuver, kick_nis, kick_vel_std
         self.Hm = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], float)

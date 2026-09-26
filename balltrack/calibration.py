@@ -1,10 +1,5 @@
-"""Pitch registration with PnLCalib (github.com/mguti97/PnLCalib, GPL-2.0).
-
-Two HRNet models find pitch keypoints and line endpoints; a camera is fitted to them and
-refined against the detected lines (the "PnL refinement"). We only need where the grass
-plane lands in the image, so the 3x4 camera matrix is reduced to an image -> pitch
-homography in this project's coordinates (x 0..105 goal line to goal line, y 0..68).
-"""
+"""Camera calibration: PnLCalib (GPL-2.0, github.com/mguti97/PnLCalib) about once a second,
+camera-motion tracking in between, and a landmark-only fallback."""
 import sys
 import traceback
 from pathlib import Path
@@ -108,13 +103,9 @@ def projection_matrix(params):
 class CameraMotion:
     """Image motion of a broadcast camera relative to a reference frame.
 
-    A broadcast camera pans, tilts and zooms from a fixed spot, so any two frames are
-    related by one homography for everything in view (grass, lines, stands). Points are
-    followed frame to frame with Lucas-Kanade flow (kept only if tracking them back lands
-    where they started), but the homography is always fitted from the keyframe where they
-    were first detected, so frame-to-frame errors don't compound. When too few points
-    survive, the current frame becomes the new keyframe.
-    `cum` maps reference-frame pixels to current-frame pixels.
+    Points are tracked frame to frame (kept only if tracking back lands where they started),
+    but the homography is fitted from their keyframe so errors don't compound. `cum` maps
+    reference-frame pixels to current-frame pixels.
     """
 
     def __init__(self, scale=0.5, max_pts=600, min_pts=60):
@@ -166,13 +157,9 @@ class CameraMotion:
 
 
 class PitchTracker:
-    """Image -> pitch mapping for every frame: PnLCalib every `interval` seconds, camera
-    motion tracking in between.
-
-    Live (async_=True) the calibration runs on a background thread on the newest frame,
-    and its result is carried forward to the current frame through the tracked motion.
-    Offline (async_=False) it runs inline, so results don't depend on timing.
-    A calibration is only accepted if its projected lines land on the painted lines.
+    """Image -> pitch mapping for every frame: PnLCalib every `interval` seconds (on a background
+    thread when async_), camera motion tracked in between. A calibration whose projected lines
+    miss the painted lines is rejected.
     """
 
     def __init__(self, calibrator, interval=1.0, async_=False, max_stale=4.0, min_line_score=0.4):
@@ -272,10 +259,9 @@ class PitchTracker:
 
 
 class KeypointPitchMapper:
-    """Fallback pitch mapping from the roboflow/sports landmark model alone (--pitch keypoints).
+    """Fallback mapping from the roboflow/sports landmark model alone (--pitch keypoints).
 
-    Less accurate than PnLCalib: the landmark positions are often 20-40 px off, i.e.
-    several metres. Fits are blended over time to reduce jitter.
+    A few metres less accurate than PnLCalib; fits are blended over time to reduce jitter.
     """
 
     MIN_INLIERS = 5

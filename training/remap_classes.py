@@ -1,9 +1,7 @@
-"""Rewrite a YOLO dataset's class ids into a given name order.
+"""Rewrite a YOLO dataset's class ids into the given name order. Roboflow exports classes
+alphabetically (ball=0, person=1); the model uses person=0, ball=1.
 
-Roboflow sorts class names alphabetically on export (ball=0, person=1), while the team's
-best.pt uses person=0, ball=1. Fine-tuning needs the dataset in the model's order.
-
-Usage: python remap_classes.py SRC_DIR DST_DIR person ball
+Usage: python -m training.remap_classes SRC_DIR DST_DIR person ball
 """
 import re
 import shutil

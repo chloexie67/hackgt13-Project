@@ -1,9 +1,6 @@
-"""Download match footage from YouTube as a single 720p video-only file.
+"""Download match footage from YouTube as one 720p video-only file (no ffmpeg needed).
 
-Usage:
-    python -m balltrack.download URL [URL ...]
-
-Video-only streams are used so ffmpeg is not needed for merging.
+Usage: python -m balltrack.download URL [URL ...]
 """
 import sys
 from pathlib import Path

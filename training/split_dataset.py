@@ -1,11 +1,7 @@
-"""Split a pre-labelled dataset into equal parts for several labellers.
+"""Split a pre-labelled dataset into equal parts for several labellers (frames dealt
+alternately, so every part mixes all clips). Each part gets its own data.yaml and zip.
 
-Frames are dealt out alternately (sorted by clip and time), so every part gets a mix of all
-clips and of train/val frames. Each part is a complete YOLO dataset with its own data.yaml
-and a zip ready to upload to Roboflow.
-
-Usage: python split_dataset.py dataset_tactical 2
-Output: dataset_tactical_part1/ (+ .zip), dataset_tactical_part2/ (+ .zip), ...
+Usage: python -m training.split_dataset dataset_tactical 2
 """
 import shutil
 import sys

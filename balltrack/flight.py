@@ -25,13 +25,10 @@ def at_feet(people, x, y):
 class AirDetector:
     """Decides whether the ball is in the air.
 
-    Ground geometry only holds for a ball on the grass; a lofted ball maps metres away
-    from where it really is. In camera-stabilised image coordinates an airborne ball
-    accelerates downward at ~9.8 m/s^2 (pixels converted with nearby players' heights),
-    which ground balls and detector noise don't: the test needs a clean, rising-then-
-    curving path from an unbroken run of detections. It counts as landed at the bounce
-    (stops falling), when its motion is flat again, when it reaches a player's feet, or
-    after max_air_s.
+    In camera-stabilised image coordinates a flying ball accelerates downward at about g
+    (pixels converted with nearby players' heights). Take-off needs a clean, rising-then-curving
+    run of detections; it lands at the bounce, when motion is flat again, at a player's feet,
+    or after max_air_s.
     """
 
     def __init__(self, window_s=0.4, min_samples=8, air_accel=(6.0, 25.0), land_accel=3.0,

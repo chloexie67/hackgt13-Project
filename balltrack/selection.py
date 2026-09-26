@@ -3,19 +3,13 @@ import numpy as np
 
 from .pitch import to_pitch
 
-class BallSelector:
-    """Chooses which detection is the ball, and refuses one-frame jumps.
 
-    A candidate is accepted straight away only if it is where the ball can plausibly be:
-      * within the Kalman filter's uncertainty around the predicted ground position
-        (the area grows while the ball is unseen and shrinks when tracking is steady), or
-      * within a screen distance of the last sighting that grows with the time since it
-        (covers a ball kicked into the air, whose ground position is meaningless).
-    Anything else must earn it: it becomes a "challenger" and replaces the current ball
-    only after it has been seen confirm_n frames in a row moving plausibly, and, if the
-    current ball is still being seen, only if it is clearly more confident.
-    With nothing tracked (start, after a cut or a long loss), every new ball needs that
-    confirmation, so a single false hit anywhere on screen can never win.
+class BallSelector:
+    """Picks the ball among the candidates and refuses one-frame jumps.
+
+    A candidate near the last sighting (on screen) or the Kalman prediction (on the pitch) is
+    accepted at once. Anything else becomes a challenger and only takes over after confirm_n
+    consecutive plausible sightings, and only if it's clearly more confident than the current ball.
     """
 
     def __init__(self, width, max_jump=0.6, gate_chi2=9.21, confirm_n=3, min_conf=0.25,
@@ -26,53 +20,58 @@ class BallSelector:
         self.forget()
 
     def forget(self):
-        """Nothing tracked any more (cut, close-up): the next ball must be confirmed."""
+        """Nothing is tracked any more (cut, close-up): the next ball must be confirmed."""
         self.confirmed_track = []
         self.last_px = self.last_t = None
         self.conf_ema = 0.0
-        self.challenger = None   # {"px", "t", "n", "conf"}
+        self.challenger = None
 
-    def _limit(self, dt):
+    def _max_jump_px(self, dt):
         return self.max_jump_px_s * max(dt, 1 / 30)
 
     def choose(self, cands, t, kf, H):
-        """Returns (candidate or None, switched). switched=True means the ball was
-        re-acquired somewhere new, so the caller should restart its filters."""
+        """Returns (candidate or None, switched); switched means the ball was re-acquired
+        somewhere new and the caller should restart its filters."""
         if self.last_t is not None and t - self.last_t > self.forget_s:
             self.forget()
 
         in_gate, out_gate = [], []
-        for c in cands:
-            dn = np.inf  # distance as a fraction of the allowed distance
+        for cand in cands:
+            rel_dist = np.inf  # distance as a fraction of the allowed distance
             if self.last_px is not None:
-                dn = np.hypot(c[0] - self.last_px[0], c[1] - self.last_px[1]) / self._limit(t - self.last_t)
+                rel_dist = (np.hypot(cand[0] - self.last_px[0], cand[1] - self.last_px[1])
+                            / self._max_jump_px(t - self.last_t))
             if kf.x is not None and H is not None:
-                gx, gy = to_pitch(H, c[0], c[2])
-                dn = min(dn, np.sqrt(kf.gate_distance2((gx, gy)) / self.gate_chi2))
-            (in_gate if dn <= 1 else out_gate).append((c[3] - 0.5 * min(dn, 1), c))
+                gx, gy = to_pitch(H, cand[0], cand[2])
+                rel_dist = min(rel_dist, np.sqrt(kf.gate_distance2((gx, gy)) / self.gate_chi2))
+            score = cand[3] - 0.5 * min(rel_dist, 1)
+            (in_gate if rel_dist <= 1 else out_gate).append((score, cand))
 
-        best = max(in_gate, key=lambda sc: sc[0])[1] if in_gate else None
+        best = max(in_gate, key=lambda scored: scored[0])[1] if in_gate else None
         switched = False
 
-        # challengers: the strongest candidate outside the gate, followed frame to frame
-        strong = [c for _, c in out_gate if c[3] >= self.min_conf]
-        ch = self.challenger
-        if ch is not None and t - ch["t"] > 0.15:
-            ch = None  # not seen again: it was a one-off
+        # follow the strongest out-of-gate candidate across frames
+        strong = [cand for _, cand in out_gate if cand[3] >= self.min_conf]
+        challenger = self.challenger
+        if challenger is not None and t - challenger["t"] > 0.15:
+            challenger = None
         if strong:
-            c = max(strong, key=lambda c: c[3])
-            if ch is not None and np.hypot(c[0] - ch["px"][0], c[1] - ch["px"][1]) <= self._limit(t - ch["t"]):
-                ch = {"px": c[:2], "t": t, "n": ch["n"] + 1, "conf": ch["conf"] + c[3], "cand": c,
-                      "seen": ch["seen"] + [(t, c)]}
+            cand = max(strong, key=lambda c: c[3])
+            continues = challenger is not None and np.hypot(
+                cand[0] - challenger["px"][0], cand[1] - challenger["px"][1]) <= self._max_jump_px(t - challenger["t"])
+            if continues:
+                challenger = {"px": cand[:2], "t": t, "n": challenger["n"] + 1,
+                              "conf": challenger["conf"] + cand[3], "cand": cand,
+                              "seen": challenger["seen"] + [(t, cand)]}
             else:
-                ch = {"px": c[:2], "t": t, "n": 1, "conf": c[3], "cand": c, "seen": [(t, c)]}
-        self.challenger = ch
+                challenger = {"px": cand[:2], "t": t, "n": 1, "conf": cand[3], "cand": cand, "seen": [(t, cand)]}
+        self.challenger = challenger
 
-        if ch is not None and ch["t"] == t and ch["n"] >= self.confirm_n:
-            avg = ch["conf"] / ch["n"]
-            if best is None or avg >= self.conf_ema + self.switch_margin:
-                best, switched = ch["cand"], True
-                self.confirmed_track = ch["seen"][:-1]  # earlier sightings, e.g. for the air test
+        if challenger is not None and challenger["t"] == t and challenger["n"] >= self.confirm_n:
+            mean_conf = challenger["conf"] / challenger["n"]
+            if best is None or mean_conf >= self.conf_ema + self.switch_margin:
+                best, switched = challenger["cand"], True
+                self.confirmed_track = challenger["seen"][:-1]
                 self.challenger = None
 
         if best is not None:

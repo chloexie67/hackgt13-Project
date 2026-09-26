@@ -16,9 +16,9 @@ fans can feel where the ball is and how it moves.
 5. **In the air**: a lofted ball (gravity-shaped path on screen) reports no ground position until it lands.
 6. **Smoothing**: Kalman filter for position and velocity.
 7. **Motor output**:
-   - `live_passes.py`: live, one speed profile per pass (starting velocity, then a steady slow-down), announced about 0.2 s after the touch.
-   - `passes.py`: for recorded games, one constant velocity per pass.
-   - `motor_speed.py`: a speed signal that never rises within a pass.
+   - `balltrack/live_passes.py`: live, one speed profile per pass (starting velocity, then a steady slow-down), announced about 0.2 s after the touch.
+   - `balltrack/passes.py`: for recorded games, one constant velocity per pass.
+   - `balltrack/motor_speed.py`: a speed signal that never rises within a pass.
 
 ## Setup
 
@@ -40,10 +40,22 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python track_ball.py screen --region 0,100,1280,720 --udp 192.168.1.50:5005
 
 # one velocity per pass for a recorded clip
-.venv/bin/python passes.py match.ball.csv --out passes.csv
+.venv/bin/python -m tools.pass_velocities match.ball.csv --out passes.csv
+
+# fetch a YouTube match (720p video only)
+.venv/bin/python -m balltrack.download "https://www.youtube.com/watch?v=..."
 ```
 
-`download.py` fetches YouTube matches (720p video only).
+## Layout
+
+| Path | Contents |
+|---|---|
+| `track_ball.py` | command line and the per-frame loop |
+| `balltrack/` | the pipeline, one module per stage: `scene`, `detection`, `selection`, `calibration`, `pitch`, `flight`, `kalman`, `live_passes`, `motor_speed`, `passes`, `sources`, `overlay` |
+| `training/` | building datasets for the detector |
+| `tools/` | evaluation and debugging scripts |
+
+Run scripts from the repository root, e.g. `python -m tools.compare results/*.csv`.
 
 ## Output
 
@@ -62,10 +74,10 @@ Empty values mean nothing reliable (ball lost, in the air, close-up): stop or ho
 
 ## Training the detector
 
-- `make_dataset.py`: picks hard and random frames and pre-labels them for Roboflow.
-- `split_dataset.py`: splits a dataset between labellers.
-- `remap_classes.py`: puts exports back in the model's class order.
-- `build_training_set.py`: merges exports, un-stretching Roboflow-resized images.
+- `training.make_dataset`: picks hard and random frames and pre-labels them for Roboflow.
+- `training.split_dataset`: splits a dataset between labellers.
+- `training.remap_classes`: puts exports back in the model's class order.
+- `training.build_training_set`: merges exports, un-stretching Roboflow-resized images.
 
 Then fine-tune from the current model:
 
@@ -75,9 +87,9 @@ yolo detect train model=models/ball_person.pt data=training_set/data.yaml imgsz=
 
 ## Evaluation tools
 
-- `compare.py`: summarises tracker CSVs.
-- `eval_calib.py`, `eval_pnl_track.py`: pitch-mapping accuracy.
-- `tune_kalman.py`: replays raw positions through filter settings.
-- `raw_yolo_test.py`: raw detector check.
-- `debug_frame.py`: single-frame keypoints and candidates.
-- `sample_coverage.sh`: whole-match coverage estimate.
+- `tools.compare`: summarises tracker CSVs.
+- `tools.eval_calib`, `tools.eval_pnl_track`: pitch-mapping accuracy.
+- `tools.tune_kalman`: replays raw positions through filter settings.
+- `tools.raw_yolo_test`: raw detector check.
+- `tools.debug_frame`: single-frame keypoints and candidates.
+- `tools/sample_coverage.sh`: whole-match coverage estimate.

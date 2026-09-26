@@ -73,11 +73,9 @@ def bright_saturation(frame, c):
 
 
 def plausible_balls(cands, H, frame=None, allow_off_pitch=False, off_pitch_margin=0.5):
-    """Drop candidates that can't be the ball: elongated boxes (boots), strongly coloured
-    ones (neon boots; the ball is white), and, where the pitch mapping is known, boxes far
-    too small or large for a 22 cm ball at that spot, or lying outside the pitch lines
-    (spare balls behind the goal, ad boards). allow_off_pitch while the ball is in the air,
-    where its ground projection can fall outside the pitch."""
+    """Drop candidates that can't be the ball in play: elongated or strongly coloured (boots),
+    the wrong size for a ball at that spot, or outside the pitch (spare balls). Off-pitch is
+    allowed while the ball is in the air, where its ground projection means nothing."""
     out = []
     Hinv = np.linalg.inv(H) if H is not None else None
     for c in cands:

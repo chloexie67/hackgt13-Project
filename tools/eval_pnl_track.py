@@ -1,6 +1,6 @@
 """Run PnLCalib + camera-motion tracking over a stretch; report coverage, speed, accuracy.
 
-Usage: python eval_pnl_track.py VIDEO START_S DURATION_S [INTERVAL_S]
+Usage: python -m tools.eval_pnl_track VIDEO START_S DURATION_S [INTERVAL_S]
 """
 import sys, time, collections, cv2, numpy as np
 from balltrack.pitch import LINE_PTS, line_mask, line_score

@@ -1,19 +1,10 @@
-"""Pick frames for training a better ball detector and pre-label them.
+"""Pick frames for training the ball detector and pre-label them for Roboflow or CVAT.
 
-Picks a mix of
-  * hard frames found by the tracker (from its CSVs): moments where it hopped between
-    objects, had only a low-confidence ball, or lost the ball during play;
-  * random gameplay frames spread over the whole matches, for variety.
-Every frame is pre-labelled with the current model in YOLO format (class 0 = ball,
-class 1 = person), so labellers only fix boxes instead of drawing them. People are kept as
-a class because the tracker uses the same model's person boxes (close-ups, in-the-air test).
+Mixes hard moments from tracker CSVs (hops, weak picks, losses) with random gameplay frames.
+Labels follow the pre-labelling model's class order; the last 20% of each video is
+validation, so near-identical neighbouring frames never land on both sides.
 
-Train/val are split by time (the last 20% of each match is validation), so near-identical
-neighbouring frames can't end up on both sides.
-
-Usage:
-    python make_dataset.py videos/*.mp4 --hard results/*.csv --n 400
-Output: dataset/ (images, labels, data.yaml) ready to upload to Roboflow or open in CVAT.
+Usage: python -m training.make_dataset videos/*.mp4 --hard results/*.csv --n 400
 """
 import argparse
 import csv
@@ -148,7 +139,7 @@ def main():
             cv2.imwrite(str(out / split / "images" / f"{name}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             lines = []
             # up to 3 ball guesses, most confident first: the labeller deletes the wrong ones
-            for cx, cy, _, conf, bw, bh in sorted(balls, key=lambda c: -c[3])[:3]:
+            for cx, cy, _, _, bw, bh in sorted(balls, key=lambda c: -c[3])[:3]:
                 lines.append(f"{BALL} {cx / w:.6f} {cy / h:.6f} {bw / w:.6f} {bh / h:.6f}")
             for x1, y1, x2, y2 in people:
                 lines.append(f"{PERSON} {(x1 + x2) / 2 / w:.6f} {(y1 + y2) / 2 / h:.6f} "
