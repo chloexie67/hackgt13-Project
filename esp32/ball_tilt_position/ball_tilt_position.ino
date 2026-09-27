@@ -61,7 +61,7 @@ const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 85 ste
 const float VELOCITY_KICK_THRESHOLD = 2.0f;    // m/s -- a new pass faster than this = "kicked"
 const float NEW_PASS_VELOCITY_CHANGE = 0.05f;  // m/s -- velocity changed by more than this = new pass
 const int   KICK_STEP_RATE_HZ       = 100;     // steps per second during a kick
-const int   KICK_TOTAL_TICKS        = 100;     // number of steps to jerk through
+const int   KICK_TOTAL_TICKS        = 20;      // number of steps to jerk through
 const unsigned long KICK_STEP_INTERVAL_MS = 1000UL / KICK_STEP_RATE_HZ;
 
 // ================= State machine =================
