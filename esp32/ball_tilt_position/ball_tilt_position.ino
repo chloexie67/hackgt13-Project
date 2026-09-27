@@ -40,6 +40,9 @@
     Y: 2048 steps/rev 28BYJ-48 on pins 27, 12, 14, 13 (ULN2003 IN1-IN4)
   Step 0 is wherever the board is at power-on, so level the board before
   powering up or resetting the ESP32.
+  A motor that has reached its target and sat still for IDLE_RELEASE_MS has
+  its coils switched off, so it doesn't hum, pulse or heat up while there's
+  no new data; they switch back on as soon as it needs to move.
 
   RANGE TEST: with RANGE_TEST_AT_STARTUP on, each motor goes from 0 to its
   + limit, then its - limit, then back to 0 when the ESP32 starts (watch the
@@ -99,6 +102,17 @@ AccelStepper yStepper(AccelStepper::FULL4WIRE, Y_PIN_IN1,
 
 // Sweep each motor through its full range when the ESP32 starts
 const bool RANGE_TEST_AT_STARTUP = true;
+
+// Switch a motor's coils off once it has been still this long. If the board's
+// weight then pushes a motor off position, set its RELEASE_WHEN_IDLE to false.
+const unsigned long IDLE_RELEASE_MS = 200;
+const bool X_RELEASE_WHEN_IDLE = true;
+const bool Y_RELEASE_WHEN_IDLE = true;
+
+bool xCoilsOn = true;
+bool yCoilsOn = true;
+unsigned long xLastMoveMs = 0;
+unsigned long yLastMoveMs = 0;
 
 // ================= Kick ("jerk") configuration =================
 const bool  KICKS_ENABLED           = false;   // temporarily off: tracking only
@@ -185,8 +199,27 @@ void loop() {
   // Move both motors toward their current target step positions
   xStepper.moveTo(xStepPosition);
   yStepper.moveTo(yStepPosition);
-  xStepper.run();
-  yStepper.run();
+  runMotor(xStepper, xCoilsOn, xLastMoveMs, X_RELEASE_WHEN_IDLE);
+  runMotor(yStepper, yCoilsOn, yLastMoveMs, Y_RELEASE_WHEN_IDLE);
+}
+
+// ---------------------------------------------------------------
+// Steps a motor toward its target. Once it has been at the target
+// for IDLE_RELEASE_MS, switches its coils off; switches them back
+// on as soon as there's somewhere to go.
+// ---------------------------------------------------------------
+void runMotor(AccelStepper &motor, bool &coilsOn, unsigned long &lastMoveMs, bool releaseWhenIdle) {
+  if (motor.distanceToGo() != 0) {
+    if (!coilsOn) {
+      motor.enableOutputs();
+      coilsOn = true;
+    }
+    motor.run();
+    lastMoveMs = millis();
+  } else if (coilsOn && releaseWhenIdle && millis() - lastMoveMs >= IDLE_RELEASE_MS) {
+    motor.disableOutputs();
+    coilsOn = false;
+  }
 }
 
 // ---------------------------------------------------------------
@@ -197,6 +230,7 @@ void moveToAndWait(AccelStepper &motor, long targetPosition, const char *name) {
   Serial.print(name);
   Serial.print(" -> ");
   Serial.println(targetPosition);
+  motor.enableOutputs();
   motor.moveTo(targetPosition);
   while (motor.distanceToGo() != 0) {
     motor.run();
