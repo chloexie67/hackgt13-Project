@@ -43,7 +43,7 @@ add `--out-video annotated.mp4` to check the tracking (yellow circle = data sent
 **3. Demo**: play the clip with sound and send the data in sync:
 ```bash
 .venv/bin/python demo.py videos/clip.mp4 --udp 192.168.1.50:5005          # ESP32 over Wi-Fi
-.venv/bin/python demo.py videos/clip.mp4                                   # Bluetooth at /dev/cu.ESP32_Test
+.venv/bin/python demo.py videos/clip.mp4                                   # Bluetooth at /dev/cu.ESP32_Rover
 ```
 Add `--serial none` to just play and print what it would send. `q` stops it.
 
@@ -67,7 +67,7 @@ Run scripts from the repository root, e.g. `python -m tools.compare results/*.cs
 The ESP32 is the device's controller: it turns the ball data from the laptop into movement you can feel.
 
 - **Link:** it receives `demo.py`'s messages over Bluetooth serial (it pairs with the Mac as
-  `ESP32_Test`), so the device needs no cable to the laptop.
+  `ESP32_Rover`), so the device needs no cable to the laptop.
 - **Motors:** it drives two stepper motors (through two stepper drivers) that tilt a
   pitch-shaped board under the user's hands, up to 20° along the length of the pitch and 15° across it.
 - **Tracking mode:** the ball's position is mapped to a tilt on each axis, so the board leans

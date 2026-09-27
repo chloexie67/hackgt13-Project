@@ -7,7 +7,7 @@ Nothing is sent while there is no ball data (replay, close-up, ball lost or in t
 so the ESP32 holds its last position.
 
 Usage:
-    python demo.py clip.mp4                                   # ESP32 over Bluetooth at /dev/cu.ESP32_Test
+    python demo.py clip.mp4                                   # ESP32 over Bluetooth at /dev/cu.ESP32_Rover
     python demo.py clip.mp4 --serial /dev/cu.usbserial-0001   # a different serial port (USB or Bluetooth)
     python demo.py clip.mp4 --udp 192.168.1.50:5005          # ESP32 over Wi-Fi
     python demo.py clip.mp4 --serial none                     # just play and print what would be sent
@@ -30,7 +30,7 @@ def main():
     p.add_argument("video")
     p.add_argument("timeline", nargs="?", help="default: <video>.timeline.csv from track_ball.py")
     p.add_argument("--udp", help="send to HOST:PORT over UDP")
-    p.add_argument("--serial", default="/dev/cu.ESP32_Test",
+    p.add_argument("--serial", default="/dev/cu.ESP32_Rover",
                    help="serial port of the ESP32 (USB, or a paired Bluetooth serial device); 'none' to not send")
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--rate", type=float, default=20.0, help="messages per second")

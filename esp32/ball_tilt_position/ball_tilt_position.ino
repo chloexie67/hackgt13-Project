@@ -9,8 +9,8 @@
     vx, vy m/s; demo.py sends ONE constant velocity per pass, so a change of velocity = a new pass
   For testing by hand, the Serial Monitor (USB, 115200) also accepts  X,Y,VX,VY
 
-  Bluetooth: needs an original ESP32 (ESP32-WROOM / DevKit). Upload, pair "ESP32_Test" on the
-  Mac, then run:  python demo.py VIDEO --serial /dev/cu.ESP32_Test
+  Bluetooth: needs an original ESP32 (ESP32-WROOM / DevKit). Upload, pair "ESP32_Rover" on the
+  Mac, then run:  python demo.py VIDEO --serial /dev/cu.ESP32_Rover
 
   STATE MACHINE
   --------------
@@ -98,8 +98,8 @@ String usbBuffer = "";
 
 void setup() {
   Serial.begin(115200);
-  SerialBT.begin("ESP32_Test");
-  Serial.println("Ready. Bluetooth \"ESP32_Test\" waiting for demo.py; USB accepts X,Y,VX,VY for testing");
+  SerialBT.begin("ESP32_Rover");
+  Serial.println("Ready. Bluetooth \"ESP32_Rover\" waiting for demo.py; USB accepts X,Y,VX,VY for testing");
 }
 
 void loop() {
