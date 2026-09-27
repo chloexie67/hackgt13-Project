@@ -45,7 +45,7 @@ add `--out-video annotated.mp4` to check the tracking (yellow circle = data sent
 .venv/bin/python demo.py videos/clip.mp4 --udp 192.168.1.50:5005          # ESP32 over Wi-Fi
 .venv/bin/python demo.py videos/clip.mp4                                   # Bluetooth at /dev/cu.ESP32_Test
 ```
-Without `--udp`/`--serial` it just plays and prints what it would send. `q` stops it.
+Add `--serial none` to just play and print what it would send. `q` stops it.
 
 ## Layout
 
@@ -53,11 +53,31 @@ Without `--udp`/`--serial` it just plays and prints what it would send. `q` stop
 |---|---|
 | `track_ball.py` | command line and the per-frame loop |
 | `demo.py` | demo player: video + sound, data to the ESP32 |
+| `esp32/` | ESP32 sketches: `ball_tilt_position` (ball data to stepper positions) and simple receivers for testing the link |
+| `notes/` | whiteboard photos of our planning and wiring |
 | `balltrack/` | the pipeline, one module per stage: `scene`, `detection`, `selection`, `calibration`, `pitch`, `flight`, `kalman`, `passes`, `sources`, `overlay`, `download` |
 | `training/` | building datasets for the detector |
 | `tools/` | evaluation and debugging scripts |
 
 Run scripts from the repository root, e.g. `python -m tools.compare results/*.csv`.
+
+## The ESP32
+
+The ESP32 is the device's controller: it turns the ball data from the laptop into movement you can feel.
+
+- **Link:** it receives `demo.py`'s messages over Bluetooth serial (it pairs with the Mac as
+  `ESP32_Test`), so the device needs no cable to the laptop.
+- **Motors:** it drives two stepper motors (through two stepper drivers) that tilt a
+  pitch-shaped board under the user's hands, up to 20° along the length of the pitch and 15° across it.
+- **Tracking mode:** the ball's position is mapped to a tilt on each axis, so the board leans
+  toward where the ball is on the field.
+- **Kick mode:** when a new pass starts faster than 2 m/s, the board jerks in the direction of the
+  pass for a fixed number of steps, then goes back to tracking.
+- **Planned:** four vibration motors (switched by MOSFETs) for extra haptic cues, a centring
+  button, a score button and an IMU to auto-level the board. The wiring is in `notes/IMG_0075.jpg`.
+
+`esp32/ball_tilt_position` computes the target step position for each motor and prints it on the
+USB serial port at 115200; the motor driver code is added separately.
 
 ## Data sent to the ESP32
 
