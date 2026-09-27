@@ -34,12 +34,16 @@
   MOTORS
   -------
   Both steppers are 4-wire, driven with AccelStepper (install "AccelStepper"
-  by Mike McCauley from the Library Manager), which moves each motor to its
-  target step position with smooth acceleration:
-    X: 200 steps/rev motor on pins 32, 33, 25, 26 (driver IN1-IN4)
+  by Mike McCauley from the Library Manager):
+    X: 200 steps/rev motor (400 half-steps) on pins 32, 33, 25, 26 (driver IN1-IN4)
     Y: 2048 steps/rev 28BYJ-48 on pins 27, 12, 14, 13 (ULN2003 IN1-IN4)
   Step 0 is wherever the board is at power-on, so level the board before
   powering up or resetting the ESP32.
+  SMOOTH MOTION: each motor follows a smoothed copy of its target (it glides
+  toward a new target over about SMOOTHING_TIME_S instead of jumping), at a
+  speed proportional to how far behind it is, so it moves continuously instead
+  of racing to each new target and stopping. X is half-stepped (0.9 deg steps)
+  for finer resolution.
   A motor that has reached its target and sat still for IDLE_RELEASE_MS has
   its coils switched off, so it doesn't hum, pulse or heat up while there's
   no new data; they switch back on as soon as it needs to move.
@@ -61,14 +65,17 @@ const float X_ANGLE_MAX_DEG = 20.0f;       // +/- 20 degrees
 const float Y_ANGLE_MAX_DEG = 15.0f;       // +/- 15 degrees
 
 // ================= Stepper motor characteristics =================
-const int   X_STEPS_PER_REV = 200;                       // given
-const float X_DEG_PER_STEP  = 360.0f / X_STEPS_PER_REV;  // = 1.8 deg/step
+// Half-stepping doubles X's resolution (0.9 deg instead of 1.8). All X step
+// counts and speeds below are in half-steps when this is on.
+const bool  X_HALF_STEP     = true;
+const int   X_STEPS_PER_REV = X_HALF_STEP ? 400 : 200;   // 200 full steps/rev (given)
+const float X_DEG_PER_STEP  = 360.0f / X_STEPS_PER_REV;  // = 0.9 deg/step half-stepped
 
 const int   Y_STEPS_PER_REV = 2048;                      // given
 const float Y_DEG_PER_STEP  = 360.0f / Y_STEPS_PER_REV;  // = ~0.176 deg/step
 
 // Furthest each stepper may go from centre (the tilt angle limits, in steps)
-const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 11 steps
+const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 22 half-steps
 const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 85 steps
 
 // ================= Stepper pins and motion =================
@@ -82,10 +89,16 @@ const int Y_PIN_IN2 = 12;   // GPIO12 must be low at boot, or the ESP32 won't st
 const int Y_PIN_IN3 = 14;
 const int Y_PIN_IN4 = 13;
 
-const float X_MAX_SPEED    = 200.0f;    // steps/s (60 RPM)
+const float X_MAX_SPEED    = 200.0f;    // steps/s (30 RPM in half-steps)
 const float X_ACCELERATION = 100.0f;    // steps/s^2
 const float Y_MAX_SPEED    = 2048.0f;   // steps/s (60 RPM)
-const float Y_ACCELERATION = 50.0f;     // steps/s^2
+const float Y_ACCELERATION = 50.0f;     // steps/s^2 (accelerations are used by the range test)
+
+// Smooth following: a new target is eased in over about SMOOTHING_TIME_S, and
+// each motor runs at FOLLOW_GAIN steps/s per step it is behind (capped at its
+// max speed), slowing gently as it arrives.
+const float SMOOTHING_TIME_S = 0.3f;
+const float FOLLOW_GAIN      = 8.0f;    // 1/s
 
 // AccelStepper's FULL4WIRE takes the coils in firing order. For an H-bridge
 // that's IN1, IN2, IN3, IN4; a 28BYJ-48 on a ULN2003 fires IN1, IN3, IN2, IN4.
@@ -93,7 +106,7 @@ const float Y_ACCELERATION = 50.0f;     // steps/s^2
 const bool X_FIRE_ORDER_1324 = false;
 const bool Y_FIRE_ORDER_1324 = true;
 
-AccelStepper xStepper(AccelStepper::FULL4WIRE, X_PIN_IN1,
+AccelStepper xStepper(X_HALF_STEP ? AccelStepper::HALF4WIRE : AccelStepper::FULL4WIRE, X_PIN_IN1,
                       X_FIRE_ORDER_1324 ? X_PIN_IN3 : X_PIN_IN2,
                       X_FIRE_ORDER_1324 ? X_PIN_IN2 : X_PIN_IN3, X_PIN_IN4);
 AccelStepper yStepper(AccelStepper::FULL4WIRE, Y_PIN_IN1,
@@ -114,6 +127,11 @@ bool yCoilsOn = true;
 unsigned long xLastMoveMs = 0;
 unsigned long yLastMoveMs = 0;
 
+// Smoothed targets the motors actually follow (in steps, fractional)
+float xSmoothTarget = 0.0f;
+float ySmoothTarget = 0.0f;
+unsigned long lastSmoothUs = 0;
+
 // ================= Kick ("jerk") configuration =================
 const bool  KICKS_ENABLED           = false;   // temporarily off: tracking only
 const float VELOCITY_KICK_THRESHOLD = 2.0f;    // m/s -- a new pass faster than this = "kicked"
@@ -126,7 +144,8 @@ const unsigned long KICK_STEP_INTERVAL_MS = 1000UL / KICK_STEP_RATE_HZ;
 enum BallState { TRACKING, KICKED };
 BallState currentState = TRACKING;
 
-// Persistent stepper positions (centered at 0, carried between states)
+// Target stepper positions (centered at 0, carried between states); the
+// motors ease toward these through xSmoothTarget / ySmoothTarget
 long xStepPosition = 0;
 long yStepPosition = 0;
 
@@ -170,6 +189,7 @@ void setup() {
     moveToAndWait(yStepper, 0, "Y");
     Serial.println("Range test done");
   }
+  lastSmoothUs = micros();
 
   Serial.println("Ready. Send data as X,Y,VX,VY (e.g. 10.5,-3.2,1.8,-0.4)");
 }
@@ -196,25 +216,42 @@ void loop() {
     updateKick();
   }
 
-  // Move both motors toward their current target step positions
-  xStepper.moveTo(xStepPosition);
-  yStepper.moveTo(yStepPosition);
-  runMotor(xStepper, xCoilsOn, xLastMoveMs, X_RELEASE_WHEN_IDLE);
-  runMotor(yStepper, yCoilsOn, yLastMoveMs, Y_RELEASE_WHEN_IDLE);
+  // Ease the smoothed targets toward the real targets. During a kick
+  // they jump straight there so the kick stays sharp.
+  unsigned long nowUs = micros();
+  float dt = (nowUs - lastSmoothUs) / 1000000.0f;
+  lastSmoothUs = nowUs;
+  if (currentState == KICKED) {
+    xSmoothTarget = xStepPosition;
+    ySmoothTarget = yStepPosition;
+  } else {
+    float blend = dt / (SMOOTHING_TIME_S + dt);
+    xSmoothTarget += (xStepPosition - xSmoothTarget) * blend;
+    ySmoothTarget += (yStepPosition - ySmoothTarget) * blend;
+  }
+
+  // Move both motors toward their smoothed targets
+  followTarget(xStepper, xSmoothTarget, X_MAX_SPEED, xCoilsOn, xLastMoveMs, X_RELEASE_WHEN_IDLE);
+  followTarget(yStepper, ySmoothTarget, Y_MAX_SPEED, yCoilsOn, yLastMoveMs, Y_RELEASE_WHEN_IDLE);
 }
 
 // ---------------------------------------------------------------
-// Steps a motor toward its target. Once it has been at the target
-// for IDLE_RELEASE_MS, switches its coils off; switches them back
-// on as soon as there's somewhere to go.
+// Runs a motor toward a (fractional) target at a speed proportional
+// to how far away it is, so it moves continuously and slows as it
+// arrives. Once it has been at the target for IDLE_RELEASE_MS,
+// switches its coils off; switches them back on when it moves again.
 // ---------------------------------------------------------------
-void runMotor(AccelStepper &motor, bool &coilsOn, unsigned long &lastMoveMs, bool releaseWhenIdle) {
-  if (motor.distanceToGo() != 0) {
+void followTarget(AccelStepper &motor, float target, float maxSpeed,
+                  bool &coilsOn, unsigned long &lastMoveMs, bool releaseWhenIdle) {
+  float error = target - motor.currentPosition();
+
+  if (fabs(error) >= 0.5f) {   // at least half a step away
     if (!coilsOn) {
       motor.enableOutputs();
       coilsOn = true;
     }
-    motor.run();
+    motor.setSpeed(constrain(error * FOLLOW_GAIN, -maxSpeed, maxSpeed));
+    motor.runSpeed();
     lastMoveMs = millis();
   } else if (coilsOn && releaseWhenIdle && millis() - lastMoveMs >= IDLE_RELEASE_MS) {
     motor.disableOutputs();
