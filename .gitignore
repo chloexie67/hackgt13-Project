@@ -20,6 +20,7 @@ third_party/
 yolo11*.pt
 models/*
 !models/ball_person.pt
+!models/ball_person_v2.pt
 
 # personal drafts
 hackgt draft/

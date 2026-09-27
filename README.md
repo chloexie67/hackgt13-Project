@@ -8,7 +8,7 @@ and sends the matching data to the ESP32.
 ## Pipeline
 
 1. **Scene filter**: pauses on replays, close-ups, crowd shots and promo frames.
-2. **Ball detection**: fine-tuned YOLO11 (`models/ball_person.pt`, classes 0 = person, 1 = ball),
+2. **Ball detection**: fine-tuned YOLO11 (`models/ball_person_v2.pt`, classes 0 = person, 1 = ball),
    plus shape, colour and off-pitch checks against boots and spare balls.
 3. **Tracking**: a candidate far from the predicted position must persist for several frames before it is accepted.
 4. **Pitch mapping**: [PnLCalib](https://github.com/mguti97/PnLCalib) calibrates the camera about once a

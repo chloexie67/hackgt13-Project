@@ -283,10 +283,9 @@ def run(args):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("source", help="video file or YouTube URL")
-    p.add_argument("--ball-weights",
-                   default="models/ball_person.pt" if Path("models/ball_person.pt").exists() else "yolo11m.pt",
-                   help="YOLO weights with 'ball' and 'person' classes (default: the team's fine-tuned "
-                        "models/ball_person.pt; falls back to COCO yolo11m)")
+    p.add_argument("--ball-weights", default="models/ball_person_v2.pt",
+                   help="YOLO weights with 'ball' and 'person' classes (default: the team's detector "
+                        "retrained on broadcast + tactical-camera frames)")
     p.add_argument("--pitch", choices=["pnl", "keypoints", "none"], default="pnl",
                    help="pitch mapping: pnl = PnLCalib landmarks + lines (accurate, default); "
                         "keypoints = roboflow/sports landmark model only (metres off); "
