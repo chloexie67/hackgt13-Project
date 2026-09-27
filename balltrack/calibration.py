@@ -1,13 +1,11 @@
 """Camera calibration: PnLCalib (GPL-2.0, github.com/mguti97/PnLCalib) about once a second,
 camera-motion tracking in between, and a landmark-only fallback."""
 import sys
-import traceback
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from .device import GPU_LOCK
 from .pitch import PITCH_VERTICES, line_mask, line_score
 
 PNLCALIB_DIR = Path(__file__).resolve().parent.parent / "third_party" / "PnLCalib"
@@ -26,8 +24,6 @@ class FieldCalibrator:
         from model.cls_hrnet_l import get_cls_net as get_cls_net_l
 
         self.torch, self.device = torch, device
-        if device == "cpu":
-            torch.set_num_threads(4)  # leave cores for the main loop
         self.pnl_refine, self.kp_threshold, self.line_threshold = pnl_refine, kp_threshold, line_threshold
         weights_kp = weights_kp or PNLCALIB_DIR / "weights" / "SV_kp"
         weights_lines = weights_lines or PNLCALIB_DIR / "weights" / "SV_lines"
@@ -62,13 +58,7 @@ class FieldCalibrator:
         x = x.to(self.device)
         _, _, h, w = x.shape
         with self.torch.no_grad():
-            if self.device == "cpu":
-                heat, heat_l = self.model(x), self.model_l(x)
-            else:
-                with GPU_LOCK:
-                    heat = self.model(x)
-                with GPU_LOCK:
-                    heat_l = self.model_l(x)
+            heat, heat_l = self.model(x), self.model_l(x)
         kp = coords_to_dict(get_keypoints_from_heatmap_batch_maxpool(heat[:, :-1].cpu()), threshold=self.kp_threshold)
         ln = coords_to_dict(get_keypoints_from_heatmap_batch_maxpool_l(heat_l[:, :-1].cpu()), threshold=self.line_threshold)
         kp, ln = complete_keypoints(kp[0], ln[0], w=w, h=h, normalize=True)
@@ -157,32 +147,22 @@ class CameraMotion:
 
 
 class PitchTracker:
-    """Image -> pitch mapping for every frame: PnLCalib every `interval` seconds (on a background
-    thread when async_), camera motion tracked in between. A calibration whose projected lines
-    miss the painted lines is rejected.
+    """Image -> pitch mapping for every frame: PnLCalib every `interval` seconds, camera motion
+    tracked in between. A calibration whose projected lines miss the painted lines is rejected.
     """
 
-    def __init__(self, calibrator, interval=1.0, async_=False, max_stale=4.0, min_line_score=0.4):
-        import threading
-
-        self.cal, self.interval, self.async_ = calibrator, interval, async_
+    def __init__(self, calibrator, interval=1.0, max_stale=4.0, min_line_score=0.4):
+        self.cal, self.interval = calibrator, interval
         self.max_stale, self.min_line_score = max_stale, min_line_score
         self.motion = CameraMotion()
-        self.lock = threading.Lock()
-        self.busy = False
-        self.generation = 0        # bumped on reset so stale worker results are dropped
         self.calibrations = self.rejected = 0
         self._new_reference()
 
     def _new_reference(self):
         self.cum = np.eye(3)       # reference-frame pixels -> current-frame pixels
-        self.history = {}          # frame number -> (cum at that frame, time)
         self.H_ref = None          # reference-frame pixels -> pitch metres
-        self.last_calib_t = None   # video time of the frame the last accepted calibration used
-        self.last_submit_t = -1e9
-        with self.lock:
-            self.pending = None
-            self.generation += 1
+        self.last_calib_t = None   # video time of the last accepted calibration
+        self.last_calib_try = -1e9
 
     def reset(self):
         """After a cut or a close-up: forget everything and recalibrate as soon as possible."""
@@ -200,60 +180,25 @@ class PitchTracker:
             return None
         return H
 
-    def _worker(self, frame, frame_no, generation):
-        try:
-            H = self._calibrate(frame)
-        except Exception:  # a crash must not leave the worker marked busy forever
-            traceback.print_exc()
-            H = None
-        with self.lock:
-            self.busy = False
-            if generation == self.generation:
-                self.pending = (frame_no, H)
-
-    def _accept(self, frame_no, H):
-        if H is None:
-            self.rejected += 1
-            return
-        if frame_no not in self.history:
-            return  # tracking restarted since this frame was calibrated
-        cum_k, t_k = self.history[frame_no]
-        self.calibrations += 1
-        self.H_ref = H @ cum_k     # reference -> image(frame_no) -> pitch
-        self.last_calib_t = t_k
-
-    def update(self, frame, frame_no, t):
-        import threading
-
+    def update(self, frame, t):
         if not self.motion.step(frame):
             self._new_reference()  # motion lost (cut, heavy blur): old calibrations don't apply
-            self.motion.step(frame)  # this frame starts the new reference
+            self.motion.step(frame)
         self.cum = self.motion.cum
-        self.history[frame_no] = (self.cum.copy(), t)
-        if len(self.history) > 600:
-            self.history.pop(next(iter(self.history)))
 
         # recalibrate on schedule, or quickly (every 0.25 s) while there is no mapping
         wait = self.interval if self.H_ref is not None else 0.25
-        due = t - self.last_submit_t >= wait
-        if self.async_:
-            with self.lock:
-                result, self.pending = self.pending, None
-                start = due and not self.busy
-                if start:
-                    self.busy = True
-                generation = self.generation
-            if result is not None:
-                self._accept(*result)
-            if start:
-                self.last_submit_t = t
-                threading.Thread(target=self._worker, daemon=True,
-                                 args=(frame.copy(), frame_no, generation)).start()
-        elif due:
-            self.last_submit_t = t
-            self._accept(frame_no, self._calibrate(frame))
+        if t - self.last_calib_try >= wait:
+            self.last_calib_try = t
+            H = self._calibrate(frame)
+            if H is None:
+                self.rejected += 1
+            else:
+                self.calibrations += 1
+                self.H_ref = H @ self.cum  # reference -> current image -> pitch
+                self.last_calib_t = t
 
-        if self.H_ref is None or self.last_calib_t is None or t - self.last_calib_t > self.max_stale:
+        if self.H_ref is None or t - self.last_calib_t > self.max_stale:
             return None  # no calibration, or only dead reckoning for too long
         return self.H_ref @ np.linalg.inv(self.cum)
 

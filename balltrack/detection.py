@@ -2,7 +2,6 @@
 import cv2
 import numpy as np
 
-from .device import GPU_LOCK
 from .pitch import on_pitch, to_pitch
 
 def pick_device(requested: str) -> str:
@@ -35,10 +34,9 @@ class BallDetector:
 
         People are empty when the model has no person class.
         """
-        with GPU_LOCK:
-            r = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf,
-                                   classes=self.class_ids + self.person_ids,
-                                   device=self.device, quantize=self.precision, verbose=False)[0]
+        r = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf,
+                               classes=self.class_ids + self.person_ids,
+                               device=self.device, quantize=self.precision, verbose=False)[0]
         balls, people = [], []
         for (x1, y1, x2, y2), c, k in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy(),
                                          r.boxes.cls.cpu().numpy()):

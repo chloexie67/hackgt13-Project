@@ -1,9 +1,4 @@
-"""Choosing the compute device, and serialising GPU work across threads."""
-import threading
-
-# Apple's Metal backend crashes if two threads encode GPU work at once; every model call that
-# may overlap with background calibration takes this lock.
-GPU_LOCK = threading.Lock()
+"""Choosing the compute device."""
 
 
 def pick_device(requested: str) -> str:

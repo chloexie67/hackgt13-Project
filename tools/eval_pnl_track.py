@@ -21,7 +21,7 @@ for i in range(n):
     if grass_ratio(f) < 0.35:
         pt.reset(); H = None; st = "not gameplay"
     else:
-        H = pt.update(f, i, t); st = "mapped" if H is not None else "none"
+        H = pt.update(f, t); st = "mapped" if H is not None else "none"
     times.append(time.time() - t0); state[st] += 1
     if H is not None and i % 5 == 0:
         m = line_mask(f); d = cv2.distanceTransform((~m).astype(np.uint8), cv2.DIST_L2, 3)
