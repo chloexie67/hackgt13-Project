@@ -49,8 +49,8 @@ const float X_FIELD_MAX = 105.0f / 2.0f;   // +/- 52.5 m
 const float Y_FIELD_MAX = 68.0f  / 2.0f;   // +/- 34 m (the tracker's pitch is 105 x 68 m)
 
 // ================= Tilt angle limits =================
-const float X_ANGLE_MAX_DEG = 20.0f;       // +/- 20 degrees
-const float Y_ANGLE_MAX_DEG = 15.0f;       // +/- 15 degrees
+const float X_ANGLE_MAX_DEG = 10.0f;       // +/- 10 degrees
+const float Y_ANGLE_MAX_DEG = 7.5f;        // +/- 7.5 degrees
 
 // ================= Stepper motor characteristics =================
 const int   X_STEPS_PER_REV = 200;                       // given
@@ -60,8 +60,8 @@ const int   Y_STEPS_PER_REV = 2048;                      // given
 const float Y_DEG_PER_STEP  = 360.0f / Y_STEPS_PER_REV;  // = ~0.176 deg/step
 
 // Furthest each stepper may go from centre (the tilt angle limits, in steps)
-const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 11 steps
-const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 85 steps
+const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 5 steps
+const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 42 steps
 
 // ================= Stepper pins and motion =================
 const int X_PIN_IN1 = 32;
@@ -305,7 +305,7 @@ void printStatus() {
 
   positionValue : ball coordinate from demo.py (e.g. ballX or ballY)
   positionMax   : max absolute field coordinate for this axis (e.g. 52.5)
-  angleMaxDeg   : max absolute tilt angle for this axis (e.g. 20.0)
+  angleMaxDeg   : max absolute tilt angle for this axis (e.g. 10.0)
   degPerStep    : stepper resolution (degrees per step) for this axis
 
   Returns the target step count relative to center (0 = centered).
