@@ -54,6 +54,7 @@ Add `--serial none` to just play and print what it would send. `q` stops it.
 | `track_ball.py` | command line and the per-frame loop |
 | `demo.py` | demo player: video + sound, data to the ESP32 |
 | `esp32/` | ESP32 sketches: `ball_tilt_position` (ball data to stepper positions) and simple receivers for testing the link |
+| `demo_data/` | tracker output for the demo clip: what `demo.py` sends, and full per-frame detail |
 | `notes/` | whiteboard photos of our planning and wiring |
 | `balltrack/` | the pipeline, one module per stage: `scene`, `detection`, `selection`, `calibration`, `pitch`, `flight`, `kalman`, `passes`, `sources`, `overlay`, `download` |
 | `training/` | building datasets for the detector |
@@ -96,6 +97,9 @@ x_pos,y_pos,x_vel,y_vel
 Nothing is sent while there is no ball data (replay, close-up, ball lost or in the air), so the ESP32 holds its last position.
 
 The same values are in `<clip>.timeline.csv`; `<clip>.ball.csv` has the full per-frame detail.
+
+`demo_data/` has both files for our demo clip, [Argentina vs France](https://www.youtube.com/watch?v=RgqKdplLIk4) from 34:57 to 37:02
+(video time 0 = match time 34:57). The video itself isn't in the repo; `balltrack.download` can fetch it.
 
 ## Training the detector
 
