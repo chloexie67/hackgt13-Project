@@ -44,10 +44,6 @@
   speed proportional to how far behind it is, so it moves continuously instead
   of racing to each new target and stopping. X is half-stepped (0.9 deg steps)
   for finer resolution.
-  HOLD: a motor's target only changes once the ball has moved at least one
-  step's worth of pitch (X_METRES_PER_STEP / Y_METRES_PER_STEP) from where it
-  was when the target last changed, so small movements and noise near a step
-  boundary don't make the board twitch back and forth.
   A motor that has reached its target and sat still for IDLE_RELEASE_MS has
   its coils switched off, so it doesn't hum, pulse or heat up while there's
   no new data; they switch back on as soon as it needs to move.
@@ -81,10 +77,6 @@ const float Y_DEG_PER_STEP  = 360.0f / Y_STEPS_PER_REV;  // = ~0.176 deg/step
 // Furthest each stepper may go from centre (the tilt angle limits, in steps)
 const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 22 half-steps
 const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 85 steps
-
-// Metres of pitch per motor step: the ball must move this far before the target changes
-const float X_METRES_PER_STEP = X_FIELD_MAX * X_DEG_PER_STEP / X_ANGLE_MAX_DEG;   // 2.36 m (4.7 m full-step)
-const float Y_METRES_PER_STEP = Y_FIELD_MAX * Y_DEG_PER_STEP / Y_ANGLE_MAX_DEG;   // 0.40 m
 
 // ================= Stepper pins and motion =================
 const int X_PIN_IN1 = 32;
@@ -160,12 +152,6 @@ long yStepPosition = 0;
 // Most recently received ball position (used to resume TRACKING after a kick)
 float lastBallX = 0.0f;
 float lastBallY = 0.0f;
-
-// Ball position the current targets were computed from (held until the ball
-// moves at least one step's worth of pitch away from it)
-float heldBallX = 0.0f;
-float heldBallY = 0.0f;
-bool  hasHeldBall = false;
 
 // Velocity of the current pass (a change means a new pass)
 float lastVelX = 0.0f;
@@ -327,16 +313,8 @@ void processLine(String line) {
   if (KICKS_ENABLED && newPass && velocityMagnitude > VELOCITY_KICK_THRESHOLD) {
     startKick(velX, velY);
   } else {
-    // Hold each axis until the ball has moved at least one step's worth of pitch
-    if (!hasHeldBall || fabs(ballX - heldBallX) >= X_METRES_PER_STEP) {
-      heldBallX = ballX;
-      xStepPosition = computeStepPosition(heldBallX, X_FIELD_MAX, X_ANGLE_MAX_DEG, X_DEG_PER_STEP);
-    }
-    if (!hasHeldBall || fabs(ballY - heldBallY) >= Y_METRES_PER_STEP) {
-      heldBallY = ballY;
-      yStepPosition = computeStepPosition(heldBallY, Y_FIELD_MAX, Y_ANGLE_MAX_DEG, Y_DEG_PER_STEP);
-    }
-    hasHeldBall = true;
+    xStepPosition = computeStepPosition(ballX, X_FIELD_MAX, X_ANGLE_MAX_DEG, X_DEG_PER_STEP);
+    yStepPosition = computeStepPosition(ballY, Y_FIELD_MAX, Y_ANGLE_MAX_DEG, Y_DEG_PER_STEP);
     printStatus();
   }
 }
@@ -417,10 +395,8 @@ void updateKick() {
   // Kick finished on both axes -> resume tracking
   if (xTicksRemaining == 0 && yTicksRemaining == 0) {
     currentState = TRACKING;
-    heldBallX = lastBallX;
-    heldBallY = lastBallY;
-    xStepPosition = computeStepPosition(heldBallX, X_FIELD_MAX, X_ANGLE_MAX_DEG, X_DEG_PER_STEP);
-    yStepPosition = computeStepPosition(heldBallY, Y_FIELD_MAX, Y_ANGLE_MAX_DEG, Y_DEG_PER_STEP);
+    xStepPosition = computeStepPosition(lastBallX, X_FIELD_MAX, X_ANGLE_MAX_DEG, X_DEG_PER_STEP);
+    yStepPosition = computeStepPosition(lastBallY, Y_FIELD_MAX, Y_ANGLE_MAX_DEG, Y_DEG_PER_STEP);
     Serial.println("STATE:KICKED_END");
     printStatus();
   }
