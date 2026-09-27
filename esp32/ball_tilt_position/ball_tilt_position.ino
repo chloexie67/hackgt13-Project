@@ -80,9 +80,9 @@ const int Y_PIN_IN3 = 14;
 const int Y_PIN_IN4 = 13;
 
 const float X_MAX_SPEED    = 200.0f;    // steps/s (60 RPM)
-const float X_ACCELERATION = 200.0f;    // steps/s^2
+const float X_ACCELERATION = 100.0f;    // steps/s^2
 const float Y_MAX_SPEED    = 2048.0f;   // steps/s (60 RPM)
-const float Y_ACCELERATION = 400.0f;    // steps/s^2
+const float Y_ACCELERATION = 50.0f;     // steps/s^2
 
 // AccelStepper's FULL4WIRE takes the coils in firing order. For an H-bridge
 // that's IN1, IN2, IN3, IN4; a 28BYJ-48 on a ULN2003 fires IN1, IN3, IN2, IN4.
