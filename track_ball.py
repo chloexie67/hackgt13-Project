@@ -288,7 +288,16 @@ def run(args):
             processed += 1
             now = time.time()
             busy_s += now - t_work
-            if now - t_report > 2:
+            if args.print and now - t_report >= 0.1:
+                shown = {k: f"{row[k]:7.2f}" if row[k] != "" else "      -"
+                         for k in ("field_x_m", "field_y_m", "field_vx_ms", "field_vy_ms",
+                                   "live_vx_ms", "live_vy_ms", "live_speed_ms")}
+                print(f"{t:8.2f}s  {row['state']:9}  x {shown['field_x_m']}  y {shown['field_y_m']}  "
+                      f"vx {shown['field_vx_ms']}  vy {shown['field_vy_ms']}  |  motor vx {shown['live_vx_ms']}  "
+                      f"vy {shown['live_vy_ms']}  speed {shown['live_speed_ms']}"
+                      + ("  NEW PASS" if row["new_pass"] == 1 else ""))
+                t_report = now
+            elif not args.print and now - t_report > 2:
                 elapsed = now - t_start
                 pct = f" {100 * frame_no / source.total:.0f}%" if source.total else ""
                 print(f"frame {frame_no}{pct}  {processed / elapsed:.1f} fps processed  busy {busy_s / elapsed:.0%}  "
@@ -366,6 +375,8 @@ def parse_args(argv=None):
     p.add_argument("--out-csv", default=None, help="default: <video>.ball.csv")
     p.add_argument("--out-video", default=None, help="write an annotated video with radar minimap")
     p.add_argument("--show", action="store_true", help="show a live preview window (q to quit)")
+    p.add_argument("--print", action="store_true",
+                   help="print position (m), velocity (m/s) and the motor velocity 10 times a second")
     p.add_argument("--udp", default=None, help="stream JSON to HOST:PORT (e.g. an ESP32)")
     p.add_argument("--realtime", action="store_true",
                    help="treat a video file like a live feed: run at video speed, drop frames when behind")
