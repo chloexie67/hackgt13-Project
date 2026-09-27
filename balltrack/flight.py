@@ -5,7 +5,6 @@ PERSON_HEIGHT_M = 1.8
 
 
 def vertical_scale(people, x, y, k=3):
-    """Pixels per metre of height near (x, y), from the heights of the k nearest people."""
     if not people:
         return None
     d = [np.hypot((a + c) / 2 - x, b2 - y) for a, _, c, b2 in people]
@@ -14,7 +13,6 @@ def vertical_scale(people, x, y, k=3):
 
 
 def at_feet(people, x, y):
-    """True if (x, y) is at some player's feet, i.e. the ball is on the ground being played."""
     for x1, y1, x2, y2 in people:
         h, w = y2 - y1, x2 - x1
         if x1 - 0.3 * w <= x <= x2 + 0.3 * w and y2 - 0.2 * h <= y <= y2 + 0.1 * h:
@@ -23,14 +21,6 @@ def at_feet(people, x, y):
 
 
 class AirDetector:
-    """Decides whether the ball is in the air.
-
-    In camera-stabilised image coordinates a flying ball accelerates downward at about g
-    (pixels converted with nearby players' heights). Take-off needs a clean, rising-then-curving
-    run of detections; it lands at the bounce, when motion is flat again, at a player's feet,
-    or after max_air_s.
-    """
-
     def __init__(self, window_s=0.4, min_samples=8, air_accel=(6.0, 25.0), land_accel=3.0,
                  max_rms_m=0.15, max_gap_s=0.12, max_air_s=3.0, min_rise=2.0):
         self.window_s, self.min_samples = window_s, min_samples
@@ -39,19 +29,16 @@ class AirDetector:
         self.reset()
 
     def reset(self):
-        self.hist = []          # (t, y_px_stabilised, px_per_m) of an unbroken run of detections
+        self.hist = []
         self.airborne = False
-        self.since = None       # take-off time
+        self.since = None
         self.falling = False
         self.accel = None
 
     def break_track(self):
-        """The ball jumped (re-acquired elsewhere): earlier samples aren't the same trajectory."""
         self.hist = []
 
     def update(self, t, y_px, px_per_m, on_ground=False):
-        """Feed one detection; returns True while the ball is in the air.
-        on_ground: independent evidence it's on the grass (at a player's feet)."""
         if self.hist and t - self.hist[-1][0] > self.max_gap_s:
             self.hist = []
         self.hist.append((t, y_px, px_per_m))
@@ -65,10 +52,10 @@ class AirDetector:
             coef = np.polyfit(ts, ys, 2)
             ppm = float(np.median(scales))
             rms = float(np.sqrt(np.mean((np.polyval(coef, ts) - ys) ** 2))) / ppm
-            if rms <= self.max_rms_m:   # only trust a clean curve
-                self.accel = 2 * coef[0] / ppm   # m/s^2, positive = accelerating downward on screen
-                vy = coef[1] / ppm               # m/s now, positive = moving down the screen
-                v_first = (coef[1] + 2 * coef[0] * ts[0]) / ppm  # at the oldest sample
+            if rms <= self.max_rms_m:
+                self.accel = 2 * coef[0] / ppm
+                vy = coef[1] / ppm
+                v_first = (coef[1] + 2 * coef[0] * ts[0]) / ppm
 
         if not self.airborne:
             if (not on_ground and self.accel is not None and self.air_accel[0] < self.accel < self.air_accel[1]
@@ -81,5 +68,5 @@ class AirDetector:
             flat = self.accel is not None and abs(self.accel) < self.land_accel
             if bounced or flat or on_ground or t - self.since > self.max_air_s:
                 self.airborne = False
-                self.hist = self.hist[-2:]  # the next flight is judged on fresh samples
+                self.hist = self.hist[-2:]
         return self.airborne

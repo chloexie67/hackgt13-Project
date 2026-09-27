@@ -2,12 +2,7 @@
 import numpy as np
 
 class BallKalman:
-    """Constant-velocity Kalman filter over pitch coordinates. State = [x, y, vx, vy] (m, m/s)."""
-
     def __init__(self, accel_std=25.0, meas_std=0.15, maneuver=False, kick_nis=13.8, kick_vel_std=10.0):
-        """meas_std: error of one mapped ground position (~0.1 m measured with PnLCalib).
-        maneuver: widen the velocity uncertainty by kick_vel_std when a measurement is far
-        outside the prediction (squared Mahalanobis distance > kick_nis), i.e. a kick."""
         self.accel_std = accel_std
         self.maneuver, self.kick_nis, self.kick_vel_std = maneuver, kick_nis, kick_vel_std
         self.Hm = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], float)
@@ -18,10 +13,9 @@ class BallKalman:
 
     def reset(self):
         self.x = self.P = None
-        self.age = 0.0  # seconds followed since the last restart; velocity needs a little history
+        self.age = 0.0
 
     def predict(self, dt):
-        """Advance the state by dt seconds (frames can be unevenly spaced when running live)."""
         if self.x is None:
             return None
         self.age += dt
@@ -32,7 +26,6 @@ class BallKalman:
         return self.x
 
     def gate_distance2(self, z):
-        """Squared Mahalanobis distance of a measurement from the prediction (chi-square, 2 dof)."""
         y = np.asarray(z, float) - self.x[:2]
         S = self.P[:2, :2] + self.R
         return float(y @ np.linalg.solve(S, y))

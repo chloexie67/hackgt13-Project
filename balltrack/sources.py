@@ -20,7 +20,7 @@ class FileSource:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         next_idx = idx
         while self.end_idx is None or next_idx < self.end_idx:
-            while idx < next_idx:  # skip without the cost of converting the frame
+            while idx < next_idx:
                 if not self.cap.grab():
                     return
                 idx += 1

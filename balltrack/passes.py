@@ -1,9 +1,4 @@
-"""Split the ball path into passes and give each pass one velocity (recorded games).
-
-A pass is the longest run of raw ground positions that fits a straight line travelled at a
-speed that never rises. Its velocity is (end - start) / duration, so motors driven at it
-arrive where the ball stops, on time.
-"""
+"""Split the ball path into passes and give each pass one velocity (recorded games)."""
 import csv
 
 import numpy as np
@@ -17,7 +12,6 @@ def load(path):
 
 
 def fits(t, xy, max_lateral_m, max_rms_m, max_accel):
-    """Does this run of points look like one straight, non-accelerating movement?"""
     c = xy.mean(0)
     d = xy - c
     _, _, vt = np.linalg.svd(d, full_matrices=False)
@@ -53,8 +47,6 @@ def segment(t, xy, restart, max_lateral_m=0.6, max_rms_m=0.25, max_accel=2.0, ma
 
 
 def merge(t, xy, passes, max_gap_s=0.12, max_turn_deg=30.0, max_speedup=1.0):
-    """Join consecutive pieces that are really one pass slowing down: they touch in time, keep
-    the same direction, and the later one isn't faster."""
     if not passes:
         return passes
     out = [passes[0]]
@@ -75,7 +67,6 @@ def describe(t, xy, passes):
     out = []
     for a, b in passes:
         tt = t[a:b + 1] - t[a]
-        # start/end from a linear fit, so one noisy endpoint doesn't skew the velocity
         p = [np.polyfit(tt, xy[a:b + 1, k], 2) for k in range(2)]
         start = np.array([np.polyval(p[k], 0) for k in range(2)])
         end = np.array([np.polyval(p[k], tt[-1]) for k in range(2)])

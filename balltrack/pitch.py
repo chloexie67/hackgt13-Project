@@ -47,7 +47,6 @@ PITCH_VERTICES = np.array([
 
 
 def _pitch_line_samples(step=0.75):
-    """Points along every painted pitch line (metres), with the id of the line each is on."""
     L, W = PITCH_LENGTH, PITCH_WIDTH
     segments = [((0, 0), (L, 0)), ((0, W), (L, W)), ((0, 0), (0, W)), ((L, 0), (L, W)),
             ((L / 2, 0), (L / 2, W))]
@@ -73,7 +72,6 @@ LINE_PTS, LINE_IDS = _pitch_line_samples()
 
 
 def line_mask(frame):
-    """Painted pitch lines: thin, bright, low-saturation pixels on grass (kits are too thick)."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     tophat = cv2.morphologyEx(hsv[:, :, 2], cv2.MORPH_TOPHAT,
                               cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11)))
@@ -86,8 +84,6 @@ def line_mask(frame):
 
 
 def line_score(H, dist, min_visible=40, tol_px=3.0):
-    """Share of in-frame projected pitch-line points within tol_px of a detected line,
-    or None if too little of the pitch is in view."""
     h, w = dist.shape
     try:
         img = cv2.perspectiveTransform(LINE_PTS[None], np.linalg.inv(H))[0]
@@ -101,8 +97,6 @@ def line_score(H, dist, min_visible=40, tol_px=3.0):
 
 
 def line_coverage(H, mask, tol_px=3):
-    """Share of detected line pixels that lie on some projected pitch line (the reverse of
-    line_score): a wrong fit leaves most of the real lines unexplained."""
     if not mask.any():
         return 0.0
     try:

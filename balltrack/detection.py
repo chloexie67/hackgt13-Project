@@ -22,18 +22,12 @@ class BallDetector:
         self.model = YOLO(weights)
         self.device, self.imgsz, self.conf, self.precision = device, imgsz, conf, precision
         names = self.model.names
-        # COCO calls it "sports ball"; soccer-specific models usually call it "ball".
         self.class_ids = [i for i, n in names.items() if "ball" in n.lower()]
         if not self.class_ids:
             raise ValueError(f"No ball class in {weights}: {names}")
-        # COCO models also detect people in the same pass, which gives a free close-up check.
         self.person_ids = [i for i, n in names.items() if n.lower() == "person"]
 
     def detect(self, frame):
-        """Return (ball candidates as (cx, cy, bottom_y, conf, w, h), people boxes as (x1, y1, x2, y2)).
-
-        People are empty when the model has no person class.
-        """
         r = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf,
                                classes=self.class_ids + self.person_ids,
                                device=self.device, quantize=self.precision, verbose=False)[0]
@@ -49,17 +43,14 @@ class BallDetector:
 
 
 BALL_DIAMETER_M = 0.22
-MAX_ASPECT = 1.6          # a ball's box is roughly square (motion blur stretches it a little)
-SIZE_RANGE = (0.5, 4.0)   # box size vs the expected size of a ball on the grass at that spot;
-                          # generous above: a lofted ball is closer to the camera, and
-                          # detector boxes run ~1.5x the ball itself
+MAX_ASPECT = 1.6
+SIZE_RANGE = (0.5, 4.0)
 
 
-MAX_BALL_SATURATION = 85  # the ball's bright pixels are white; neon boots are strongly coloured
+MAX_BALL_SATURATION = 85
 
 
 def bright_saturation(frame, c):
-    """Median saturation (0-255) of the brightest quarter of pixels in a candidate's box."""
     cx, cy, w, h = c[0], c[1], c[4], c[5]
     x1, y1 = max(int(cx - w / 2), 0), max(int(cy - h / 2), 0)
     crop = frame[y1:int(cy + h / 2) + 1, x1:int(cx + w / 2) + 1]
@@ -71,9 +62,6 @@ def bright_saturation(frame, c):
 
 
 def plausible_balls(cands, H, frame=None, allow_off_pitch=False, off_pitch_margin=0.5):
-    """Drop candidates that can't be the ball in play: elongated or strongly coloured (boots),
-    the wrong size for a ball at that spot, or outside the pitch (spare balls). Off-pitch is
-    allowed while the ball is in the air, where its ground projection means nothing."""
     out = []
     Hinv = np.linalg.inv(H) if H is not None else None
     for c in cands:

@@ -5,11 +5,10 @@ import numpy as np
 from .pitch import (CIRCLE_RADIUS, GOAL_BOX_LENGTH, GOAL_BOX_WIDTH, PENALTY_BOX_LENGTH,
                     PENALTY_BOX_WIDTH, PITCH_LENGTH, PITCH_WIDTH)
 
-RADAR_SCALE = 3  # px per metre
+RADAR_SCALE = 3
 
 
 def draw_radar(frame, ball_xy, state):
-    """Draw a top-down pitch with the ball in the bottom-right corner of the frame."""
     s = RADAR_SCALE
     w, h = int(PITCH_LENGTH * s), int(PITCH_WIDTH * s)
     pad = 10
@@ -40,7 +39,6 @@ def draw_radar(frame, ball_xy, state):
 
 def annotate(frame, rec, px, ball_xy):
     if px is not None:
-        # yellow = position sent to the device; grey = followed but not sent (uncertain, air)
         sent = rec["field_x_m"] != ""
         cv2.circle(frame, (int(px[0]), int(px[1])), 14, (0, 255, 255) if sent else (150, 150, 150), 2)
     label = f"{rec['state']}"

@@ -72,7 +72,6 @@ class FieldCalibrator:
         if params is None:
             return None
         P = projection_matrix(params)
-        # grass plane z=0; PnLCalib's world origin is the centre spot
         G = P[:, [0, 1, 3]] @ np.array([[1, 0, -52.5], [0, 1, -34.0], [0, 0, 1]])
         try:
             return np.linalg.inv(G)
@@ -91,12 +90,6 @@ def projection_matrix(params):
 
 
 class CameraMotion:
-    """Image motion of a broadcast camera relative to a reference frame.
-
-    Points are tracked frame to frame (kept only if tracking back lands where they started),
-    but the homography is fitted from their keyframe so errors don't compound. `cum` maps
-    reference-frame pixels to current-frame pixels.
-    """
 
     def __init__(self, scale=0.5, max_pts=600, min_pts=60):
         self.scale, self.max_pts, self.min_pts = scale, max_pts, min_pts
@@ -112,7 +105,6 @@ class CameraMotion:
         return None if pts is None else pts.reshape(-1, 2)
 
     def step(self, frame):
-        """Advance to this frame. Returns False if motion was lost (cut, heavy blur)."""
         g = cv2.cvtColor(cv2.resize(frame, None, fx=self.scale, fy=self.scale), cv2.COLOR_BGR2GRAY)
         if self.prev is None:
             self.prev, self.key_pts, self.pts, self.key_base = g, self._detect(g), None, self.cum.copy()
@@ -147,9 +139,6 @@ class CameraMotion:
 
 
 class PitchTracker:
-    """Image -> pitch mapping for every frame: PnLCalib every `interval` seconds, camera motion
-    tracked in between. A calibration whose projected lines miss the painted lines is rejected.
-    """
 
     def __init__(self, calibrator, interval=1.0, max_stale=4.0, min_line_score=0.4):
         self.cal, self.interval = calibrator, interval
@@ -165,7 +154,6 @@ class PitchTracker:
         self.last_calib_try = -1e9
 
     def reset(self):
-        """After a cut or a close-up: forget everything and recalibrate as soon as possible."""
         self.motion.reset()
         self._new_reference()
 
@@ -182,11 +170,10 @@ class PitchTracker:
 
     def update(self, frame, t):
         if not self.motion.step(frame):
-            self._new_reference()  # motion lost (cut, heavy blur): old calibrations don't apply
+            self._new_reference()
             self.motion.step(frame)
         self.cum = self.motion.cum
 
-        # recalibrate on schedule, or quickly (every 0.25 s) while there is no mapping
         wait = self.interval if self.H_ref is not None else 0.25
         if t - self.last_calib_try >= wait:
             self.last_calib_try = t
@@ -195,22 +182,18 @@ class PitchTracker:
                 self.rejected += 1
             else:
                 self.calibrations += 1
-                self.H_ref = H @ self.cum  # reference -> current image -> pitch
+                self.H_ref = H @ self.cum
                 self.last_calib_t = t
 
         if self.H_ref is None or t - self.last_calib_t > self.max_stale:
-            return None  # no calibration, or only dead reckoning for too long
+            return None
         return self.H_ref @ np.linalg.inv(self.cum)
 
 
 class KeypointPitchMapper:
-    """Fallback mapping from the roboflow/sports landmark model alone (--pitch keypoints).
-
-    A few metres less accurate than PnLCalib; fits are blended over time to reduce jitter.
-    """
 
     MIN_INLIERS = 5
-    MAX_DISAGREE_M = 4.0  # a fit this far from the previous one is taken as a new view, not blended
+    MAX_DISAGREE_M = 4.0
 
     def __init__(self, weights: str, device: str, kp_conf: float, hold_frames: int, precision: int = 32):
         from ultralytics import YOLO
@@ -219,7 +202,7 @@ class KeypointPitchMapper:
         self.device, self.kp_conf, self.hold_frames = device, kp_conf, hold_frames
         self.precision = precision
         self.H = None
-        self.age = 0  # frames since H was last refreshed
+        self.age = 0
         self.grid = None
 
     def reset(self):
@@ -240,12 +223,11 @@ class KeypointPitchMapper:
             self.H, self.age = H, 0
         else:
             self.age += 1
-            if self.age > self.hold_frames:  # camera has moved too much to trust the old one
+            if self.age > self.hold_frames:
                 self.H = None
         return self.H
 
     def hold(self):
-        """Reuse the previous homography without refitting (for --pitch-every > 1)."""
         self.age += 1
         if self.age > self.hold_frames:
             self.H = None

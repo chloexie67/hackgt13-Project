@@ -5,12 +5,6 @@ from .pitch import to_pitch
 
 
 class BallSelector:
-    """Picks the ball among the candidates and refuses one-frame jumps.
-
-    A candidate near the last sighting (on screen) or the Kalman prediction (on the pitch) is
-    accepted at once. Anything else becomes a challenger and only takes over after confirm_n
-    consecutive plausible sightings, and only if it's clearly more confident than the current ball.
-    """
 
     def __init__(self, width, max_jump=0.6, gate_chi2=9.21, confirm_n=3, min_conf=0.25,
                  switch_margin=0.2, forget_s=3.0):
@@ -20,7 +14,6 @@ class BallSelector:
         self.forget()
 
     def forget(self):
-        """Nothing is tracked any more (cut, close-up): the next ball must be confirmed."""
         self.confirmed_track = []
         self.last_px = self.last_t = None
         self.conf_ema = 0.0
@@ -30,14 +23,12 @@ class BallSelector:
         return self.max_jump_px_s * max(dt, 1 / 30)
 
     def choose(self, cands, t, kf, H):
-        """Returns (candidate or None, switched); switched means the ball was re-acquired
-        somewhere new and the caller should restart its filters."""
         if self.last_t is not None and t - self.last_t > self.forget_s:
             self.forget()
 
         in_gate, out_gate = [], []
         for cand in cands:
-            rel_dist = np.inf  # distance as a fraction of the allowed distance
+            rel_dist = np.inf
             if self.last_px is not None:
                 rel_dist = (np.hypot(cand[0] - self.last_px[0], cand[1] - self.last_px[1])
                             / self._max_jump_px(t - self.last_t))
@@ -50,7 +41,6 @@ class BallSelector:
         best = max(in_gate, key=lambda scored: scored[0])[1] if in_gate else None
         switched = False
 
-        # follow the strongest out-of-gate candidate across frames
         strong = [cand for _, cand in out_gate if cand[3] >= self.min_conf]
         challenger = self.challenger
         if challenger is not None and t - challenger["t"] > 0.15:
