@@ -1,15 +1,16 @@
 """Demo: play a pre-processed clip with its sound and send the ball data to the ESP32 in sync.
 
-Each message is one text line:  t,valid,x,y,vx,vy
-    t      video time (s)
-    valid  1 = ball position known, 0 = no data (paused, lost, in the air): hold or stop the motors
-    x, y   metres from the centre spot (+x toward the right-hand goal, +y toward the near touchline)
-    vx, vy m/s; constant for the whole of each pass
+Each message is one text line:  x_pos,y_pos,x_vel,y_vel
+    x_pos, y_pos  metres from the centre spot (+x toward the right-hand goal, +y toward the near touchline)
+    x_vel, y_vel  m/s; constant for the whole of each pass
+Nothing is sent while there is no ball data (replay, close-up, ball lost or in the air),
+so the ESP32 holds its last position.
 
 Usage:
+    python demo.py clip.mp4                                   # ESP32 over Bluetooth at /dev/cu.ESP32_Test
+    python demo.py clip.mp4 --serial /dev/cu.usbserial-0001   # a different serial port (USB or Bluetooth)
     python demo.py clip.mp4 --udp 192.168.1.50:5005          # ESP32 over Wi-Fi
-    python demo.py clip.mp4 --serial /dev/cu.usbserial-0001   # ESP32 over USB or Bluetooth serial
-    python demo.py clip.mp4                                   # just play and print what would be sent
+    python demo.py clip.mp4 --serial none                     # just play and print what would be sent
 Press q in the video window (or Ctrl+C) to stop.
 """
 import argparse
@@ -29,7 +30,8 @@ def main():
     p.add_argument("video")
     p.add_argument("timeline", nargs="?", help="default: <video>.timeline.csv from track_ball.py")
     p.add_argument("--udp", help="send to HOST:PORT over UDP")
-    p.add_argument("--serial", help="send to a serial port (USB, or a paired Bluetooth serial device)")
+    p.add_argument("--serial", default="/dev/cu.ESP32_Test",
+                   help="serial port of the ESP32 (USB, or a paired Bluetooth serial device); 'none' to not send")
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--rate", type=float, default=20.0, help="messages per second")
     p.add_argument("--start", type=float, default=None, help="video time to start at (default: start of the timeline)")
@@ -52,9 +54,10 @@ def main():
     if args.udp:
         host, port = args.udp.rsplit(":", 1)
         udp_sock, udp_addr = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), (host, int(port))
-    if args.serial:
+    if args.serial and args.serial.lower() != "none":
         import serial
         serial_port = serial.Serial(args.serial, args.baud)
+        print(f"Connected to {args.serial}")
 
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
@@ -105,15 +108,16 @@ def main():
             if now >= next_send:
                 next_send = now + 1 / args.rate
                 row = rows[max(bisect.bisect_right(times, now) - 1, 0)]
-                valid = row["valid"] == "1"
-                values = [row[k] if valid and row[k] != "" else "0" for k in ("x_m", "y_m", "vx_ms", "vy_ms")]
-                line = f"{now:.2f},{int(valid)}," + ",".join(values) + "\n"
-                if udp_sock is not None:
-                    udp_sock.sendto(line.encode(), udp_addr)
-                if serial_port is not None:
-                    serial_port.write(line.encode())
+                if row["valid"] == "1":
+                    line = ",".join(row[k] for k in ("x_m", "y_m", "vx_ms", "vy_ms")) + "\n"
+                    if udp_sock is not None:
+                        udp_sock.sendto(line.encode(), udp_addr)
+                    if serial_port is not None:
+                        serial_port.write(line.encode())
+                else:
+                    line = "(no data, nothing sent)\n"
                 if now - last_print >= 0.5:
-                    print(line, end="")
+                    print(f"{now:6.2f}  {line}", end="")
                     last_print = now
 
             if cv2.waitKey(1) & 0xFF == ord("q"):

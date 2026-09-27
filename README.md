@@ -43,7 +43,7 @@ add `--out-video annotated.mp4` to check the tracking (yellow circle = data sent
 **3. Demo**: play the clip with sound and send the data in sync:
 ```bash
 .venv/bin/python demo.py videos/clip.mp4 --udp 192.168.1.50:5005          # ESP32 over Wi-Fi
-.venv/bin/python demo.py videos/clip.mp4 --serial /dev/cu.usbserial-0001   # USB or Bluetooth serial
+.venv/bin/python demo.py videos/clip.mp4                                   # Bluetooth at /dev/cu.ESP32_Test
 ```
 Without `--udp`/`--serial` it just plays and prints what it would send. `q` stops it.
 
@@ -64,16 +64,16 @@ Run scripts from the repository root, e.g. `python -m tools.compare results/*.cs
 `demo.py` sends one text line per message (20 per second by default):
 
 ```
-t,valid,x,y,vx,vy
-7.14,1,-8.58,10.65,-1.37,9.13
+x_pos,y_pos,x_vel,y_vel
+-8.58,10.65,-1.37,9.13
 ```
 
 | Field | Meaning |
 |---|---|
-| `t` | video time in seconds |
-| `valid` | 1 = ball position known; 0 = no data (replay, close-up, ball lost or in the air): hold or stop the motors |
-| `x`, `y` | metres from the centre spot: +x toward the right-hand goal (as seen by the camera), +y toward the near touchline |
-| `vx`, `vy` | m/s; one constant velocity for each pass |
+| `x_pos`, `y_pos` | metres from the centre spot: +x toward the right-hand goal (as seen by the camera), +y toward the near touchline |
+| `x_vel`, `y_vel` | m/s; one constant velocity for each pass |
+
+Nothing is sent while there is no ball data (replay, close-up, ball lost or in the air), so the ESP32 holds its last position.
 
 The same values are in `<clip>.timeline.csv`; `<clip>.ball.csv` has the full per-frame detail.
 
