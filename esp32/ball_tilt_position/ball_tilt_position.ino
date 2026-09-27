@@ -31,12 +31,18 @@
     Steps never go past the tilt angle limits.
     Once both axes finish their ticks, the state returns to TRACKING.
 
-  NOTE: This script only computes and prints the TARGET STEP POSITION
-  for the X and Y steppers (plus current state). It does not contain
-  any motor/driver code (no step()/direction pin toggling, no
-  AccelStepper, etc.) — that will be added separately once this logic
-  is confirmed correct.
+  MOTORS
+  -------
+  Both steppers are 4-wire, driven with AccelStepper (install "AccelStepper"
+  by Mike McCauley from the Library Manager), which moves each motor to its
+  target step position with smooth acceleration:
+    X: 200 steps/rev motor on pins 32, 33, 25, 26 (driver IN1-IN4)
+    Y: 2048 steps/rev 28BYJ-48 on pins 27, 12, 14, 13 (ULN2003 IN1-IN4)
+  Step 0 is wherever the board is at power-on, so level the board before
+  powering up or resetting the ESP32.
 */
+
+#include <AccelStepper.h>
 
 // ================= Field geometry =================
 const float X_FIELD_MAX = 105.0f / 2.0f;   // +/- 52.5 m
@@ -56,6 +62,27 @@ const float Y_DEG_PER_STEP  = 360.0f / Y_STEPS_PER_REV;  // = ~0.176 deg/step
 // Furthest each stepper may go from centre (the tilt angle limits, in steps)
 const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 11 steps
 const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 85 steps
+
+// ================= Stepper pins and motion =================
+const int X_PIN_IN1 = 32;
+const int X_PIN_IN2 = 33;
+const int X_PIN_IN3 = 25;
+const int X_PIN_IN4 = 26;
+
+const int Y_PIN_IN1 = 27;
+const int Y_PIN_IN2 = 12;   // GPIO12 must be low at boot, or the ESP32 won't start
+const int Y_PIN_IN3 = 14;
+const int Y_PIN_IN4 = 13;
+
+const float X_MAX_SPEED    = 500.0f;    // steps/s
+const float X_ACCELERATION = 3000.0f;   // steps/s^2
+const float Y_MAX_SPEED    = 400.0f;    // steps/s (a 28BYJ-48 stalls much above ~500)
+const float Y_ACCELERATION = 1500.0f;   // steps/s^2
+
+// AccelStepper's FULL4WIRE takes the coils in firing order. For an H-bridge
+// that's IN1, IN2, IN3, IN4; a 28BYJ-48 on a ULN2003 fires IN1, IN3, IN2, IN4.
+AccelStepper xStepper(AccelStepper::FULL4WIRE, X_PIN_IN1, X_PIN_IN2, X_PIN_IN3, X_PIN_IN4);
+AccelStepper yStepper(AccelStepper::FULL4WIRE, Y_PIN_IN1, Y_PIN_IN3, Y_PIN_IN2, Y_PIN_IN4);
 
 // ================= Kick ("jerk") configuration =================
 const float VELOCITY_KICK_THRESHOLD = 2.0f;    // m/s -- a new pass faster than this = "kicked"
@@ -94,6 +121,14 @@ String inputBuffer = "";
 
 void setup() {
   Serial.begin(115200);
+
+  xStepper.setMaxSpeed(X_MAX_SPEED);
+  xStepper.setAcceleration(X_ACCELERATION);
+  xStepper.setCurrentPosition(0);
+  yStepper.setMaxSpeed(Y_MAX_SPEED);
+  yStepper.setAcceleration(Y_ACCELERATION);
+  yStepper.setCurrentPosition(0);
+
   Serial.println("Ready. Send data as X,Y,VX,VY (e.g. 10.5,-3.2,1.8,-0.4)");
 }
 
@@ -118,6 +153,12 @@ void loop() {
   if (currentState == KICKED) {
     updateKick();
   }
+
+  // Move both motors toward their current target step positions
+  xStepper.moveTo(xStepPosition);
+  yStepper.moveTo(yStepPosition);
+  xStepper.run();
+  yStepper.run();
 }
 
 // ---------------------------------------------------------------
