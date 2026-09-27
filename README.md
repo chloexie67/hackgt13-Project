@@ -1,8 +1,9 @@
 # Soccer ball tracker for a haptic device
 
-Tracks the ball in soccer video (TV broadcasts or tactical-camera recordings, recorded or live)
-and turns it into positions and pass velocities that drive haptic motors, so visually impaired
-fans can feel where the ball is and how it moves.
+Tracks the ball in a recorded soccer clip (TV broadcast or tactical camera) and turns it into
+positions and pass velocities for haptic motors, so visually impaired fans can feel where the ball
+is and how it moves. The clip is pre-processed once; for the demo, `demo.py` plays it with sound
+and sends the matching data to the ESP32.
 
 ## Pipeline
 
@@ -15,10 +16,8 @@ fans can feel where the ball is and how it moves.
    point becomes metres on a 105 × 68 m pitch, with the centre spot at (0, 0).
 5. **In the air**: a lofted ball (gravity-shaped path on screen) reports no ground position until it lands.
 6. **Smoothing**: Kalman filter for position and velocity.
-7. **Motor output**:
-   - `balltrack/live_passes.py`: live, one speed profile per pass (starting velocity, then a steady slow-down), announced about 0.2 s after the touch.
-   - `balltrack/passes.py`: for recorded games, one constant velocity per pass.
-   - `balltrack/motor_speed.py`: a speed signal that never rises within a pass.
+7. **Passes**: the ball path is split into passes (`balltrack/passes.py`) and each pass gets one
+   constant velocity, so the motors hold a steady speed for the whole pass.
 
 ## Setup
 
@@ -29,48 +28,54 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ## Usage
 
+**1. Get a clip** (or use your own mp4 with sound):
 ```bash
-# recorded broadcast clip, with an annotated video (yellow circle = sent to the device)
-.venv/bin/python track_ball.py match.mp4 --start 600 --duration 60 --out-video annotated.mp4
-
-# tactical-camera footage: the ball is tiny, so enlarge the detector input
-.venv/bin/python track_ball.py tactical.mp4 --imgsz 2560
-
-# live: capture the screen and stream JSON to the device over UDP
-.venv/bin/python track_ball.py screen --region 0,100,1280,720 --udp 192.168.1.50:5005
-
-# one velocity per pass for a recorded clip
-.venv/bin/python -m tools.pass_velocities match.ball.csv --out passes.csv
-
-# fetch a YouTube match (720p video only)
-.venv/bin/python -m balltrack.download "https://www.youtube.com/watch?v=..."
+.venv/bin/python -m balltrack.download "https://www.youtube.com/watch?v=..." --from 6:00 --to 7:30
 ```
+
+**2. Pre-process it** (once; writes `<clip>.ball.csv` and `<clip>.timeline.csv`):
+```bash
+.venv/bin/python track_ball.py videos/clip.mp4 --imgsz 1920
+```
+Use `--imgsz 1920` for 1080p broadcasts and `--imgsz 2560` for tactical-camera footage (tiny ball);
+add `--out-video annotated.mp4` to check the tracking (yellow circle = data sent).
+
+**3. Demo**: play the clip with sound and send the data in sync:
+```bash
+.venv/bin/python demo.py videos/clip.mp4 --udp 192.168.1.50:5005          # ESP32 over Wi-Fi
+.venv/bin/python demo.py videos/clip.mp4 --serial /dev/cu.usbserial-0001   # USB or Bluetooth serial
+```
+Without `--udp`/`--serial` it just plays and prints what it would send. `q` stops it.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `track_ball.py` | command line and the per-frame loop |
-| `balltrack/` | the pipeline, one module per stage: `scene`, `detection`, `selection`, `calibration`, `pitch`, `flight`, `kalman`, `live_passes`, `motor_speed`, `passes`, `sources`, `overlay` |
+| `demo.py` | demo player: video + sound, data to the ESP32 |
+| `balltrack/` | the pipeline, one module per stage: `scene`, `detection`, `selection`, `calibration`, `pitch`, `flight`, `kalman`, `passes`, `sources`, `overlay`, `download` |
 | `training/` | building datasets for the detector |
 | `tools/` | evaluation and debugging scripts |
 
 Run scripts from the repository root, e.g. `python -m tools.compare results/*.csv`.
 
-## Output
+## Data sent to the ESP32
 
-One CSV row per frame, and the same fields per UDP message:
+`demo.py` sends one text line per message (20 per second by default):
+
+```
+t,valid,x,y,vx,vy
+7.14,1,-8.58,10.65,-1.37,9.13
+```
 
 | Field | Meaning |
 |---|---|
-| `state` | `live`, `coasting`, `air`, `lost`, `paused`, `uncertain`, `unmapped` |
-| `field_x_m`, `field_y_m` | position in metres from the centre spot: +x toward the right-hand goal (as seen by the camera), +y toward the camera-side touchline |
-| `field_vx_ms`, `field_vy_ms` | Kalman velocity in m/s |
-| `live_vx_ms`, `live_vy_ms`, `live_speed_ms` | what the motors should do **now** (live pass profile) |
-| `new_pass`, `pass_t0`, `pass_vx0_ms`, `pass_vy0_ms`, `pass_decel_ms2` | the current pass profile: speed(t) = start speed − decel × (t − pass_t0) |
-| `motor_speed_ms` (+ `motor_t`) | speed that never rises within a pass, 0.15 s behind |
+| `t` | video time in seconds |
+| `valid` | 1 = ball position known; 0 = no data (replay, close-up, ball lost or in the air): hold or stop the motors |
+| `x`, `y` | metres from the centre spot: +x toward the right-hand goal (as seen by the camera), +y toward the near touchline |
+| `vx`, `vy` | m/s; one constant velocity for each pass |
 
-Empty values mean nothing reliable (ball lost, in the air, close-up): stop or hold the motors.
+The same values are in `<clip>.timeline.csv`; `<clip>.ball.csv` has the full per-frame detail.
 
 ## Training the detector
 
