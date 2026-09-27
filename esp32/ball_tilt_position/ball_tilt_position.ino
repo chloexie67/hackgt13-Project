@@ -53,9 +53,8 @@ const float Y_ANGLE_MAX_DEG = 15.0f;       // +/- 15 degrees
 const int   X_STEPS_PER_REV = 200;                       // given
 const float X_DEG_PER_STEP  = 360.0f / X_STEPS_PER_REV;  // = 1.8 deg/step
 
-// CHECK: 5.625 deg/step leaves only +/-2 steps for +/-15 degrees. If this is a 28BYJ-48,
-// 5.625 deg is before its 64:1 gearbox; at the output shaft it's ~0.176 deg/step (2048/rev).
-const float Y_DEG_PER_STEP  = 5.625f;                    // given
+const int   Y_STEPS_PER_REV = 2048;                      // given
+const float Y_DEG_PER_STEP  = 360.0f / Y_STEPS_PER_REV;  // = ~0.176 deg/step
 
 // Furthest each stepper may go from centre (the tilt limits, in steps)
 const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);
