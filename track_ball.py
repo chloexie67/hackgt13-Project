@@ -264,13 +264,18 @@ def run(args):
         for row in csv.DictReader(f_rows):
             t, valid = float(row["time_s"]), row["field_x_m"] != ""
             pass_id = next((k for k, ps in enumerate(passes) if ps["t_start"] <= t <= ps["t_end"]), None)
-            if not valid:
-                vx = vy = ""
-            elif pass_id is not None:
+            if pass_id is not None:
                 vx, vy = round(passes[pass_id]["vx"], 2), round(passes[pass_id]["vy"], 2)
             else:
-                vx, vy = row["field_vx_ms"] or 0.0, row["field_vy_ms"] or 0.0
-            timeline.writerow(dict(time_s=row["time_s"], valid=int(valid), x_m=row["field_x_m"], y_m=row["field_y_m"],
+                vx, vy = float(row["field_vx_ms"] or 0.0), float(row["field_vy_ms"] or 0.0)
+            # faster than any ball on the grass: it's in the air (its ground position is wrong)
+            # or the mapping slipped, so send nothing rather than a wrong position and speed
+            if np.hypot(vx, vy) > args.max_speed:
+                valid = False
+            if not valid:
+                vx = vy = ""
+            timeline.writerow(dict(time_s=row["time_s"], valid=int(valid),
+                                   x_m=row["field_x_m"] if valid else "", y_m=row["field_y_m"] if valid else "",
                                    vx_ms=vx, vy_ms=vy, pass_id="" if pass_id is None or not valid else pass_id))
     print(f"Wrote {out_timeline} ({len(passes)} passes) - play it with: python demo.py {name} {out_timeline}")
 
