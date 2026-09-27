@@ -7,8 +7,8 @@ Nothing is sent while there is no ball data (replay, close-up, ball lost or in t
 so the ESP32 holds its last position.
 
 Usage:
-    python demo.py clip.mp4                                   # ESP32 over Bluetooth at /dev/cu.ESP32_Rover
-    python demo.py clip.mp4 --serial /dev/cu.usbserial-0001   # a different serial port (USB or Bluetooth)
+    python demo.py clip.mp4                                   # ESP32 plugged in by USB (port found automatically)
+    python demo.py clip.mp4 --serial /dev/cu.usbserial-0001   # a specific serial port
     python demo.py clip.mp4 --udp 192.168.1.50:5005          # ESP32 over Wi-Fi
     python demo.py clip.mp4 --serial none                     # just play and print what would be sent
 Press q in the video window (or Ctrl+C) to stop.
@@ -30,8 +30,8 @@ def main():
     p.add_argument("video")
     p.add_argument("timeline", nargs="?", help="default: <video>.timeline.csv from track_ball.py")
     p.add_argument("--udp", help="send to HOST:PORT over UDP")
-    p.add_argument("--serial", default="/dev/cu.ESP32_Rover",
-                   help="serial port of the ESP32 (USB, or a paired Bluetooth serial device); 'none' to not send")
+    p.add_argument("--serial", default="auto",
+                   help="serial port of the ESP32; 'auto' = the first USB serial port, 'none' = don't send")
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--rate", type=float, default=20.0, help="messages per second")
     p.add_argument("--start", type=float, default=None, help="video time to start at (default: start of the timeline)")
@@ -54,10 +54,21 @@ def main():
     if args.udp:
         host, port = args.udp.rsplit(":", 1)
         udp_sock, udp_addr = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), (host, int(port))
-    if args.serial and args.serial.lower() != "none":
+    if args.serial.lower() != "none":
         import serial
-        serial_port = serial.Serial(args.serial, args.baud)
-        print(f"Connected to {args.serial}")
+        from serial.tools import list_ports
+        port_name = args.serial
+        if port_name == "auto":
+            usb_ports = [port.device for port in list_ports.comports() if port.vid is not None]
+            if not usb_ports:
+                raise SystemExit("No USB serial port found. Is the ESP32 plugged in? (or pass --serial PORT)")
+            port_name = usb_ports[0]
+        serial_port = serial.Serial()
+        serial_port.port, serial_port.baudrate = port_name, args.baud
+        serial_port.dtr = serial_port.rts = False  # these lines reset most ESP32 boards
+        serial_port.open()
+        time.sleep(2)  # some boards reset anyway when the port opens; let it finish booting
+        print(f"Connected to {port_name}")
 
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
