@@ -33,17 +33,16 @@
 
   MOTORS
   -------
-  Both steppers are 4-wire, driven with the built-in Stepper library. Each
-  loop, a motor that isn't at its target step position takes one step if
-  enough time has passed since its last one, so both motors move together
-  and Serial keeps being read while they move.
+  Both steppers are 4-wire, driven with AccelStepper (install "AccelStepper"
+  by Mike McCauley from the Library Manager), which moves each motor to its
+  target step position with smooth acceleration:
     X: 200 steps/rev motor on pins 32, 33, 25, 26 (driver IN1-IN4)
     Y: 2048 steps/rev 28BYJ-48 on pins 27, 12, 14, 13 (ULN2003 IN1-IN4)
   Step 0 is wherever the board is at power-on, so level the board before
   powering up or resetting the ESP32.
 */
 
-#include <Stepper.h>
+#include <AccelStepper.h>
 
 // ================= Field geometry =================
 const float X_FIELD_MAX = 105.0f / 2.0f;   // +/- 52.5 m
@@ -75,22 +74,15 @@ const int Y_PIN_IN2 = 12;   // GPIO12 must be low at boot, or the ESP32 won't st
 const int Y_PIN_IN3 = 14;
 const int Y_PIN_IN4 = 13;
 
-// Stepper has no acceleration, so these are speeds each motor can start at without stalling
-const long X_RPM = 75;   // = 250 steps/s
-const long Y_RPM = 12;   // = ~410 steps/s (a 28BYJ-48 stalls much above ~15 RPM)
-const unsigned long X_MOTOR_STEP_INTERVAL_US = 60000000UL / (X_STEPS_PER_REV * X_RPM);
-const unsigned long Y_MOTOR_STEP_INTERVAL_US = 60000000UL / (Y_STEPS_PER_REV * Y_RPM);
+const float X_MAX_SPEED    = 200.0f;    // steps/s (60 RPM)
+const float X_ACCELERATION = 200.0f;    // steps/s^2
+const float Y_MAX_SPEED    = 2048.0f;   // steps/s (60 RPM)
+const float Y_ACCELERATION = 400.0f;    // steps/s^2
 
-// Stepper takes the coils in firing order. For an H-bridge that's
-// IN1, IN2, IN3, IN4; a 28BYJ-48 on a ULN2003 fires IN1, IN3, IN2, IN4.
-Stepper xStepper(X_STEPS_PER_REV, X_PIN_IN1, X_PIN_IN2, X_PIN_IN3, X_PIN_IN4);
-Stepper yStepper(Y_STEPS_PER_REV, Y_PIN_IN1, Y_PIN_IN3, Y_PIN_IN2, Y_PIN_IN4);
-
-// Where each motor actually is (xStepPosition / yStepPosition are where it should go)
-long xMotorPosition = 0;
-long yMotorPosition = 0;
-unsigned long xLastMotorStepUs = 0;
-unsigned long yLastMotorStepUs = 0;
+// AccelStepper's FULL4WIRE takes the coils in firing order. For an H-bridge
+// that's IN1, IN2, IN3, IN4; a 28BYJ-48 on a ULN2003 fires IN1, IN3, IN2, IN4.
+AccelStepper xStepper(AccelStepper::FULL4WIRE, X_PIN_IN1, X_PIN_IN2, X_PIN_IN3, X_PIN_IN4);
+AccelStepper yStepper(AccelStepper::FULL4WIRE, Y_PIN_IN1, Y_PIN_IN3, Y_PIN_IN2, Y_PIN_IN4);
 
 // ================= Kick ("jerk") configuration =================
 const float VELOCITY_KICK_THRESHOLD = 2.0f;    // m/s -- a new pass faster than this = "kicked"
@@ -130,8 +122,12 @@ String inputBuffer = "";
 void setup() {
   Serial.begin(115200);
 
-  xStepper.setSpeed(X_RPM);
-  yStepper.setSpeed(Y_RPM);
+  xStepper.setMaxSpeed(X_MAX_SPEED);
+  xStepper.setAcceleration(X_ACCELERATION);
+  xStepper.setCurrentPosition(0);
+  yStepper.setMaxSpeed(Y_MAX_SPEED);
+  yStepper.setAcceleration(Y_ACCELERATION);
+  yStepper.setCurrentPosition(0);
 
   Serial.println("Ready. Send data as X,Y,VX,VY (e.g. 10.5,-3.2,1.8,-0.4)");
 }
@@ -159,25 +155,10 @@ void loop() {
   }
 
   // Move both motors toward their current target step positions
-  stepTowardTarget(xStepper, xMotorPosition, xStepPosition, xLastMotorStepUs, X_MOTOR_STEP_INTERVAL_US);
-  stepTowardTarget(yStepper, yMotorPosition, yStepPosition, yLastMotorStepUs, Y_MOTOR_STEP_INTERVAL_US);
-}
-
-// ---------------------------------------------------------------
-// Takes one step toward the target if the motor isn't there yet and
-// its step interval has passed. Never waits, so the loop keeps running.
-// ---------------------------------------------------------------
-void stepTowardTarget(Stepper &motor, long &motorPosition, long targetPosition,
-                      unsigned long &lastStepUs, unsigned long stepIntervalUs) {
-  if (motorPosition == targetPosition) return;
-
-  unsigned long now = micros();
-  if (now - lastStepUs < stepIntervalUs) return;
-
-  int direction = (targetPosition > motorPosition) ? 1 : -1;
-  motor.step(direction);
-  motorPosition += direction;
-  lastStepUs = now;
+  xStepper.moveTo(xStepPosition);
+  yStepper.moveTo(yStepPosition);
+  xStepper.run();
+  yStepper.run();
 }
 
 // ---------------------------------------------------------------
