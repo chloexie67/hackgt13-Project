@@ -70,10 +70,10 @@ The ESP32 is the device's controller: it turns the ball data from the laptop int
 - **Link:** it's plugged into the laptop by USB and receives `demo.py`'s messages as plain serial
   text at 115200 baud.
 - **Motors:** it drives two stepper motors (through two stepper drivers) that tilt a
-  pitch-shaped board under the user's hands, up to 10° along the length of the pitch and 7.5° across it.
+  pitch-shaped board under the user's hands, up to 20° along the length of the pitch and 15° across it.
 - **Tracking mode:** the ball's position is mapped to a tilt on each axis, so the board leans
   toward where the ball is on the field.
-- **Kick mode:** when a new pass starts faster than 2 m/s, the board jerks in the direction of the
+- **Kick mode** (currently switched off in the sketch): when a new pass starts faster than 2 m/s, the board jerks in the direction of the
   pass for a fixed number of steps, then goes back to tracking.
 - **Planned:** four vibration motors (switched by MOSFETs) for extra haptic cues, a centring
   button, a score button and an IMU to auto-level the board. The wiring is in `notes/IMG_0075.jpg`.

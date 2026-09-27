@@ -40,6 +40,11 @@
     Y: 2048 steps/rev 28BYJ-48 on pins 27, 12, 14, 13 (ULN2003 IN1-IN4)
   Step 0 is wherever the board is at power-on, so level the board before
   powering up or resetting the ESP32.
+
+  RANGE TEST: with RANGE_TEST_AT_STARTUP on, each motor goes from 0 to its
+  + limit, then its - limit, then back to 0 when the ESP32 starts (watch the
+  board and the Serial Monitor). If a motor only ever turns one way, its coils
+  are firing in the wrong order: flip that motor's *_FIRE_ORDER_1324 setting.
 */
 
 #include <AccelStepper.h>
@@ -49,8 +54,8 @@ const float X_FIELD_MAX = 105.0f / 2.0f;   // +/- 52.5 m
 const float Y_FIELD_MAX = 68.0f  / 2.0f;   // +/- 34 m (the tracker's pitch is 105 x 68 m)
 
 // ================= Tilt angle limits =================
-const float X_ANGLE_MAX_DEG = 10.0f;       // +/- 10 degrees
-const float Y_ANGLE_MAX_DEG = 7.5f;        // +/- 7.5 degrees
+const float X_ANGLE_MAX_DEG = 20.0f;       // +/- 20 degrees
+const float Y_ANGLE_MAX_DEG = 15.0f;       // +/- 15 degrees
 
 // ================= Stepper motor characteristics =================
 const int   X_STEPS_PER_REV = 200;                       // given
@@ -60,8 +65,8 @@ const int   Y_STEPS_PER_REV = 2048;                      // given
 const float Y_DEG_PER_STEP  = 360.0f / Y_STEPS_PER_REV;  // = ~0.176 deg/step
 
 // Furthest each stepper may go from centre (the tilt angle limits, in steps)
-const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 5 steps
-const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 42 steps
+const long X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / X_DEG_PER_STEP);   // 11 steps
+const long Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / Y_DEG_PER_STEP);   // 85 steps
 
 // ================= Stepper pins and motion =================
 const int X_PIN_IN1 = 32;
@@ -81,10 +86,22 @@ const float Y_ACCELERATION = 400.0f;    // steps/s^2
 
 // AccelStepper's FULL4WIRE takes the coils in firing order. For an H-bridge
 // that's IN1, IN2, IN3, IN4; a 28BYJ-48 on a ULN2003 fires IN1, IN3, IN2, IN4.
-AccelStepper xStepper(AccelStepper::FULL4WIRE, X_PIN_IN1, X_PIN_IN2, X_PIN_IN3, X_PIN_IN4);
-AccelStepper yStepper(AccelStepper::FULL4WIRE, Y_PIN_IN1, Y_PIN_IN3, Y_PIN_IN2, Y_PIN_IN4);
+// A motor that only turns one way (or just shakes) has the wrong order: flip its setting.
+const bool X_FIRE_ORDER_1324 = false;
+const bool Y_FIRE_ORDER_1324 = true;
+
+AccelStepper xStepper(AccelStepper::FULL4WIRE, X_PIN_IN1,
+                      X_FIRE_ORDER_1324 ? X_PIN_IN3 : X_PIN_IN2,
+                      X_FIRE_ORDER_1324 ? X_PIN_IN2 : X_PIN_IN3, X_PIN_IN4);
+AccelStepper yStepper(AccelStepper::FULL4WIRE, Y_PIN_IN1,
+                      Y_FIRE_ORDER_1324 ? Y_PIN_IN3 : Y_PIN_IN2,
+                      Y_FIRE_ORDER_1324 ? Y_PIN_IN2 : Y_PIN_IN3, Y_PIN_IN4);
+
+// Sweep each motor through its full range when the ESP32 starts
+const bool RANGE_TEST_AT_STARTUP = true;
 
 // ================= Kick ("jerk") configuration =================
+const bool  KICKS_ENABLED           = false;   // temporarily off: tracking only
 const float VELOCITY_KICK_THRESHOLD = 2.0f;    // m/s -- a new pass faster than this = "kicked"
 const float NEW_PASS_VELOCITY_CHANGE = 0.05f;  // m/s -- velocity changed by more than this = new pass
 const int   KICK_STEP_RATE_HZ       = 100;     // steps per second during a kick
@@ -129,6 +146,17 @@ void setup() {
   yStepper.setAcceleration(Y_ACCELERATION);
   yStepper.setCurrentPosition(0);
 
+  if (RANGE_TEST_AT_STARTUP) {
+    Serial.println("Range test: each motor 0 -> +limit -> -limit -> 0");
+    moveToAndWait(xStepper, X_STEP_LIMIT, "X");
+    moveToAndWait(xStepper, -X_STEP_LIMIT, "X");
+    moveToAndWait(xStepper, 0, "X");
+    moveToAndWait(yStepper, Y_STEP_LIMIT, "Y");
+    moveToAndWait(yStepper, -Y_STEP_LIMIT, "Y");
+    moveToAndWait(yStepper, 0, "Y");
+    Serial.println("Range test done");
+  }
+
   Serial.println("Ready. Send data as X,Y,VX,VY (e.g. 10.5,-3.2,1.8,-0.4)");
 }
 
@@ -159,6 +187,21 @@ void loop() {
   yStepper.moveTo(yStepPosition);
   xStepper.run();
   yStepper.run();
+}
+
+// ---------------------------------------------------------------
+// Moves one motor to a step position and waits there briefly
+// (used only by the startup range test).
+// ---------------------------------------------------------------
+void moveToAndWait(AccelStepper &motor, long targetPosition, const char *name) {
+  Serial.print(name);
+  Serial.print(" -> ");
+  Serial.println(targetPosition);
+  motor.moveTo(targetPosition);
+  while (motor.distanceToGo() != 0) {
+    motor.run();
+  }
+  delay(500);
 }
 
 // ---------------------------------------------------------------
@@ -196,7 +239,7 @@ void processLine(String line) {
 
   float velocityMagnitude = sqrt(velX * velX + velY * velY);
 
-  if (newPass && velocityMagnitude > VELOCITY_KICK_THRESHOLD) {
+  if (KICKS_ENABLED && newPass && velocityMagnitude > VELOCITY_KICK_THRESHOLD) {
     startKick(velX, velY);
   } else {
     xStepPosition = computeStepPosition(ballX, X_FIELD_MAX, X_ANGLE_MAX_DEG, X_DEG_PER_STEP);
@@ -305,7 +348,7 @@ void printStatus() {
 
   positionValue : ball coordinate from demo.py (e.g. ballX or ballY)
   positionMax   : max absolute field coordinate for this axis (e.g. 52.5)
-  angleMaxDeg   : max absolute tilt angle for this axis (e.g. 10.0)
+  angleMaxDeg   : max absolute tilt angle for this axis (e.g. 20.0)
   degPerStep    : stepper resolution (degrees per step) for this axis
 
   Returns the target step count relative to center (0 = centered).
