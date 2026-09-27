@@ -14,11 +14,19 @@
     k  kick: a quick jerk out and back on both motors
     a  all of the above
     0  return both motors to centre
+    -  halve both motors' speed and acceleration
+    +  double both motors' speed and acceleration
 
   Each move prints what the board should do. PASS means AccelStepper reached the
   target within the expected time; steppers have no position sensor, so check
   by eye that the board actually moved that way and came back level. If a motor
   buzzes without turning, its coil order is wrong (see the pin notes below).
+
+  SHAKING WITHOUT TURNING: press - a few times and test again. If the motor
+  turns at a lower speed, that speed was too high; put the working values into
+  the main sketch. If it still only shakes at the slowest speed, it isn't speed:
+  swap the middle two pins on that motor's AccelStepper line (coil order), and
+  check the motor supply and that the driver shares ground with the ESP32.
 */
 
 #include <AccelStepper.h>
@@ -42,10 +50,12 @@ const float Y_ANGLE_MAX_DEG = 15.0f;
 const long  X_STEP_LIMIT = (long) (X_ANGLE_MAX_DEG / (360.0f / X_STEPS_PER_REV));   // 11 steps
 const long  Y_STEP_LIMIT = (long) (Y_ANGLE_MAX_DEG / (360.0f / Y_STEPS_PER_REV));   // 85 steps
 
-const float X_MAX_SPEED    = 250.0f;    // steps/s
-const float X_ACCELERATION = 1000.0f;   // steps/s^2
-const float Y_MAX_SPEED    = 400.0f;    // steps/s (a 28BYJ-48 stalls much above ~500)
-const float Y_ACCELERATION = 1000.0f;   // steps/s^2
+// Starting speeds, deliberately slow; change them live with - and +
+float xMaxSpeed    = 100.0f;   // steps/s (30 RPM)
+float xAcceleration = 200.0f;  // steps/s^2
+float yMaxSpeed    = 200.0f;   // steps/s (~6 RPM)
+float yAcceleration = 400.0f;  // steps/s^2
+const float MIN_MAX_SPEED = 5.0f;
 
 const unsigned long PAUSE_MS = 500;     // pause between moves so each one is easy to see
 
@@ -60,11 +70,8 @@ int testsFailed = 0;
 void setup() {
   Serial.begin(115200);
 
-  xStepper.setMaxSpeed(X_MAX_SPEED);
-  xStepper.setAcceleration(X_ACCELERATION);
+  applySpeeds();
   xStepper.setCurrentPosition(0);
-  yStepper.setMaxSpeed(Y_MAX_SPEED);
-  yStepper.setAcceleration(Y_ACCELERATION);
   yStepper.setCurrentPosition(0);
 
   delay(500);
@@ -72,6 +79,7 @@ void setup() {
   Serial.println("Stepper test (AccelStepper). Board should be level now.");
   Serial.print("X limit: +/-"); Serial.print(X_STEP_LIMIT); Serial.println(" steps (20 deg)");
   Serial.print("Y limit: +/-"); Serial.print(Y_STEP_LIMIT); Serial.println(" steps (15 deg)");
+  printSpeeds();
   printHelp();
 }
 
@@ -91,6 +99,19 @@ void loop() {
     case 'k': testKick(); break;
     case 'a': testXMotor(); testYMotor(); testBothMotors(); testKick(); break;
     case '0': moveAndCheck("Return to centre", 0, 0, "board level"); break;
+    case '-':
+    case '+': {
+      float factor = (command == '+') ? 2.0f : 0.5f;
+      if (command == '-' && xMaxSpeed * factor < MIN_MAX_SPEED) {
+        Serial.println("Already at the slowest speed.");
+      } else {
+        xMaxSpeed *= factor; xAcceleration *= factor;
+        yMaxSpeed *= factor; yAcceleration *= factor;
+        applySpeeds();
+      }
+      printSpeeds();
+      return;
+    }
     default:
       Serial.print("Unknown command: ");
       Serial.println(command);
@@ -107,7 +128,21 @@ void loop() {
 }
 
 void printHelp() {
-  Serial.println("Commands: x = X motor, y = Y motor, b = both, k = kick, a = all, 0 = centre");
+  Serial.println("Commands: x = X motor, y = Y motor, b = both, k = kick, a = all, 0 = centre, - slower, + faster");
+}
+
+void applySpeeds() {
+  xStepper.setMaxSpeed(xMaxSpeed);
+  xStepper.setAcceleration(xAcceleration);
+  yStepper.setMaxSpeed(yMaxSpeed);
+  yStepper.setAcceleration(yAcceleration);
+}
+
+void printSpeeds() {
+  Serial.print("X: "); Serial.print(xMaxSpeed); Serial.print(" steps/s (");
+  Serial.print(xMaxSpeed * 60.0f / X_STEPS_PER_REV); Serial.print(" RPM), accel "); Serial.println(xAcceleration);
+  Serial.print("Y: "); Serial.print(yMaxSpeed); Serial.print(" steps/s (");
+  Serial.print(yMaxSpeed * 60.0f / Y_STEPS_PER_REV); Serial.print(" RPM), accel "); Serial.println(yAcceleration);
 }
 
 // ---------------------------------------------------------------
@@ -155,14 +190,13 @@ void testBothMotors() {
 // ---------------------------------------------------------------
 void testKick() {
   Serial.println("--- Kick ---");
-  xStepper.setAcceleration(X_ACCELERATION * 4);
-  yStepper.setAcceleration(Y_ACCELERATION * 4);
+  xStepper.setAcceleration(xAcceleration * 4);
+  yStepper.setAcceleration(yAcceleration * 4);
   moveAndCheck("Kick toward (+X, +Y)", X_STEP_LIMIT, 20, "sharp jolt toward one corner");
   moveAndCheck("Back to centre", 0, 0, "level again");
   moveAndCheck("Kick toward (-X, -Y)", -X_STEP_LIMIT, -20, "sharp jolt the other way");
   moveAndCheck("Back to centre", 0, 0, "level again");
-  xStepper.setAcceleration(X_ACCELERATION);
-  yStepper.setAcceleration(Y_ACCELERATION);
+  applySpeeds();
 }
 
 // ---------------------------------------------------------------
@@ -172,8 +206,8 @@ void testKick() {
 void moveAndCheck(const char *name, long xTarget, long yTarget, const char *expected) {
   long xDistance = labs(xTarget - xStepper.currentPosition());
   long yDistance = labs(yTarget - yStepper.currentPosition());
-  unsigned long timeLimitMs = 500 + max(expectedMoveMs(xDistance, X_MAX_SPEED, X_ACCELERATION),
-                                        expectedMoveMs(yDistance, Y_MAX_SPEED, Y_ACCELERATION)) * 2;
+  unsigned long timeLimitMs = 500 + max(expectedMoveMs(xDistance, xMaxSpeed, xAcceleration),
+                                        expectedMoveMs(yDistance, yMaxSpeed, yAcceleration)) * 2;
 
   Serial.print(name);
   Serial.print(" -> should see: ");
